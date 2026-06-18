@@ -1,0 +1,48 @@
+:root {
+  --bg-deep: #020810;
+  --bg-dark: #050d1a;
+  --bg-card: #080f20;
+  --bg-glass: rgba(8, 20, 50, 0.6);
+  --blue-primary: #0a6fff;
+  --blue-bright: #2196f3;
+  --blue-neon: #00c3ff;
+  --blue-glow: rgba(10, 111, 255, 0.25);
+  --silver: #8fa4bf;
+  --silver-light: #c8d8ea;
+  --white: #e8f2ff;
+  --text-muted: #4a6a8a;
+  --border: rgba(30, 80, 160, 0.35);
+  --border-bright: rgba(10, 111, 255, 0.5);
+  --font-display: 'Orbitron', monospace;
+  --font-head: 'Syne', sans-serif;
+  --font-body: 'DM Sans', sans-serif;
+  --font-tech: 'Rajdhani', sans-serif;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--bg-deep);
+  color: var(--white);
+  font-family: var(--font-body);
+  overflow-x: hidden;
+}
+
+a {
+  text-decoration: none;
+}
+
+button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+}

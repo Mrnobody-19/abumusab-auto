@@ -1,0 +1,201 @@
+/* Mobile Menu */
+.mobile-menu-btn {
+  display: none;
+  flex-direction: column;
+  gap: 5px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 6px;
+  z-index: 200;
+}
+
+.mobile-menu-btn span {
+  display: block;
+  width: 22px;
+  height: 2px;
+  background: var(--silver);
+  border-radius: 2px;
+  transition: all 0.3s;
+}
+
+.mobile-menu-btn.open span:nth-child(1) {
+  transform: translateY(7px) rotate(45deg);
+}
+
+.mobile-menu-btn.open span:nth-child(2) {
+  opacity: 0;
+}
+
+.mobile-menu-btn.open span:nth-child(3) {
+  transform: translateY(-7px) rotate(-45deg);
+}
+
+.mobile-nav-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  top: 52px;
+  z-index: 150;
+  background: rgba(2, 8, 16, 0.98);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  flex-direction: column;
+  padding: 32px 24px;
+  border-top: 1px solid var(--border);
+}
+
+.mobile-nav-overlay.open {
+  display: flex;
+}
+
+.mobile-nav-overlay a {
+  font-family: var(--font-tech);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--silver);
+  text-decoration: none;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 16px 0;
+  border-bottom: 1px solid rgba(30, 80, 160, 0.15);
+  transition: color 0.2s;
+}
+
+.mobile-nav-overlay a:hover {
+  color: var(--blue-neon);
+}
+
+.mobile-nav-cta {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+  flex-wrap: wrap;
+}
+
+/* Dashboard Mobile */
+.dash-mobile-topbar {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: rgba(4, 12, 28, 0.98);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 52px;
+  z-index: 50;
+}
+
+.sidebar-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(10, 111, 255, 0.1);
+  border: 1px solid rgba(10, 111, 255, 0.3);
+  color: var(--blue-neon);
+  font-family: var(--font-tech);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 8px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+/* Tablet */
+@media (max-width: 1024px) {
+  .site-nav { padding: 16px 28px; }
+  .nav-links { gap: 20px; }
+  .nav-links a { font-size: 11px; }
+  .services-grid { grid-template-columns: repeat(2, 1fr); }
+  .stats-grid { gap: 24px; }
+  .stat-num { font-size: 36px; }
+  .footer-grid { gap: 32px; }
+  .svc-page-grid { gap: 18px; }
+  .kpi-bar { grid-template-columns: repeat(3, 1fr); }
+  .analytics-row { grid-template-columns: 1fr 1fr; }
+  .admin-kpi { grid-template-columns: repeat(2, 1fr); }
+  .admin-charts { grid-template-columns: 1fr; }
+  .admin-tables { grid-template-columns: 1fr; }
+  .workshop-metrics { grid-template-columns: 1fr 1fr; }
+  .portal-layout { grid-template-columns: 240px 1fr; }
+  .gallery-masonry { columns: 2; }
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  .switcher-brand { font-size: 9px; padding-right: 12px; margin-right: 8px; }
+  .pg-btn { font-size: 10px; padding: 5px 10px; }
+  
+  .nav-links { display: none; }
+  .nav-cta { display: none; }
+  .mobile-menu-btn { display: flex; }
+  .site-nav { padding: 14px 20px; }
+  
+  .services-grid { grid-template-columns: 1fr 1fr; gap: 14px; }
+  .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 24px; }
+  .stat-num { font-size: 32px; }
+  .ceo-section { grid-template-columns: 1fr; gap: 32px; }
+  .testi-grid { grid-template-columns: 1fr; }
+  .site-footer { padding: 40px 20px 20px; }
+  .footer-grid { grid-template-columns: 1fr 1fr; gap: 28px; }
+  .footer-bottom { flex-direction: column; gap: 8px; text-align: center; }
+  
+  .svc-page-grid { grid-template-columns: 1fr; }
+  .process-steps { flex-direction: column; gap: 24px; }
+  .process-steps::before { display: none; }
+  .process-step { display: flex; gap: 16px; text-align: left; align-items: flex-start; }
+  .step-circle { margin: 0; flex-shrink: 0; width: 48px; height: 48px; font-size: 16px; }
+  
+  .dash-layout, .admin-layout { flex-direction: column; height: auto; }
+  .dash-sidebar { display: none; width: 100%; position: fixed; top: 52px; left: 0; bottom: 0; z-index: 100; overflow-y: auto; }
+  .dash-sidebar.mobile-open { display: flex; }
+  .dash-mobile-topbar { display: flex; }
+  .dash-topbar { padding: 12px 16px; flex-wrap: wrap; gap: 10px; }
+  .topbar-title { font-size: 15px; }
+  .topbar-controls { gap: 8px; flex-wrap: wrap; }
+  .tbc { font-size: 11px; padding: 5px 10px; }
+  .dash-content { padding: 14px; gap: 14px; }
+  .kpi-bar { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .kpi-val { font-size: 22px; }
+  .map-row { grid-template-columns: 1fr; }
+  .vehicle-panel { max-height: 280px; }
+  .analytics-row { grid-template-columns: 1fr; }
+  
+  .admin-main { padding: 14px; }
+  .admin-header { flex-direction: column; gap: 16px; align-items: flex-start; }
+  .admin-greeting { font-size: 20px; }
+  .admin-actions { flex-wrap: wrap; }
+  .admin-kpi { grid-template-columns: 1fr 1fr; gap: 12px; }
+  .akpi-val { font-size: 28px; }
+  .workshop-metrics { grid-template-columns: 1fr; }
+  
+  .portal-layout { grid-template-columns: 1fr; }
+  .portal-sidebar { position: static; display: none; }
+  .mvc-stats { grid-template-columns: repeat(2, 1fr); }
+  
+  .gallery-masonry { columns: 1; }
+  .gallery-filters { gap: 8px; }
+  .gf-btn { font-size: 11px; padding: 7px 14px; }
+  .gallery-stats { gap: 20px; flex-wrap: wrap; justify-content: center; }
+  .gs-num { font-size: 28px; }
+}
+
+/* Small Mobile */
+@media (max-width: 480px) {
+  .page-switcher { padding: 0 10px; }
+  .switcher-brand { display: none; }
+  .pg-btn { font-size: 10px; padding: 4px 8px; }
+  .services-grid { grid-template-columns: 1fr; }
+  .stats-grid { grid-template-columns: 1fr 1fr; }
+  .footer-grid { grid-template-columns: 1fr; }
+  .kpi-bar { grid-template-columns: 1fr 1fr; }
+  .admin-kpi { grid-template-columns: 1fr; }
+  .gallery-stats { flex-direction: column; gap: 16px; align-items: center; }
+  .services-section { padding: 50px 16px; }
+  .testimonials-section { padding: 50px 16px; }
+  .site-footer { padding: 32px 16px 16px; }
+  .login-card { padding: 36px 24px; }
+  .login-title { font-size: 20px; }
+}
