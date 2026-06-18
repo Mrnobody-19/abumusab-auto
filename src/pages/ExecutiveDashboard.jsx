@@ -3,7 +3,6 @@ import { useAuth } from '../context/AuthContext'
 import { peyflexService as paymentService } from '../services/peyflexService'
 import { supabase } from '../lib/supabase'
 import { useNavigate } from 'react-router-dom'
-import RealtimeMap from '../components/Map/RealtimeMap'
 import AddTrackerModal from '../components/AddTrackerModal'
 
 const ExecutiveDashboard = () => {
@@ -11,13 +10,15 @@ const ExecutiveDashboard = () => {
   const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
   const [showAddModal, setShowAddModal] = useState(false)
-  const [selectedVehicle, setSelectedVehicle] = useState(null)
   const [vehicles, setVehicles] = useState([])
   const [stats, setStats] = useState({
     totalVehicles: 0,
     activeTrackers: 0,
+    expiringSoon: 0,
+    expiredTrackers: 0,
     totalRecharges: 0,
     totalRevenue: 0,
+    monthlyRevenue: 0,
     recentTransactions: []
   })
   const [balance, setBalance] = useState(null)
@@ -36,48 +37,68 @@ const ExecutiveDashboard = () => {
       setLoading(true)
       setError(null)
 
-      const { count: totalVehicles, error: vehiclesError } = await supabase
+      // Get all vehicles
+      const { data: vehiclesData, error: vehiclesError } = await supabase
         .from('vehicles')
-        .select('*', { count: 'exact', head: true })
+        .select('*')
       if (vehiclesError) throw vehiclesError
 
-      const { count: activeTrackers, error: activeError } = await supabase
-        .from('vehicles')
-        .select('*', { count: 'exact', head: true })
-        .gte('tracker_expiry', new Date().toISOString().split('T')[0])
-      if (activeError) throw activeError
+      const totalVehicles = vehiclesData?.length || 0
+      const activeTrackers = vehiclesData?.filter(v => v.tracker_status === 'active').length || 0
+      const expiringSoon = vehiclesData?.filter(v => v.tracker_status === 'expiring_soon').length || 0
+      const expiredTrackers = vehiclesData?.filter(v => v.tracker_status === 'expired').length || 0
 
-      const { data: recharges, error: rechargeError } = await supabase
-        .from('recharges')
+      // Get monthly revenue
+      const firstDayOfMonth = new Date()
+      firstDayOfMonth.setDate(1)
+      firstDayOfMonth.setHours(0, 0, 0, 0)
+
+      const { data: monthlyData, error: monthlyError } = await supabase
+        .from('recharge_history')
         .select('amount')
-        .order('created_at', { ascending: false })
-        .limit(100)
-      if (rechargeError) throw rechargeError
+        .gte('processed_at', firstDayOfMonth.toISOString())
+        .eq('status', 'success')
+      if (monthlyError) throw monthlyError
 
-      const totalRecharges = recharges?.length || 0
-      const totalRevenue = recharges?.reduce((sum, r) => sum + (r.amount || 0), 0) || 0
+      const monthlyRevenue = monthlyData?.reduce((sum, r) => sum + (r.amount || 0), 0) || 0
 
+      // Get all time revenue
+      const { data: allTimeData, error: allTimeError } = await supabase
+        .from('recharge_history')
+        .select('amount')
+        .eq('status', 'success')
+      if (allTimeError) throw allTimeError
+
+      const totalRevenue = allTimeData?.reduce((sum, r) => sum + (r.amount || 0), 0) || 0
+      const totalRecharges = allTimeData?.length || 0
+
+      // Get recent transactions
       const { data: recentTransactions, error: recentError } = await supabase
-        .from('recharges')
+        .from('recharge_history')
         .select(`
           id,
           amount,
           status,
-          created_at,
-          vehicles (
+          processed_at,
+          vehicle_id,
+          vehicles:vehicle_id (
             vehicle_id,
             name
           )
         `)
-        .order('created_at', { ascending: false })
+        .eq('status', 'success')
+        .order('processed_at', { ascending: false })
         .limit(10)
       if (recentError) throw recentError
 
       setStats({
-        totalVehicles: totalVehicles || 0,
-        activeTrackers: activeTrackers || 0,
+        totalVehicles,
+        activeTrackers,
+        expiringSoon,
+        expiredTrackers,
         totalRecharges,
         totalRevenue,
+        monthlyRevenue,
         recentTransactions: recentTransactions || []
       })
 
@@ -137,28 +158,26 @@ const ExecutiveDashboard = () => {
 
   const getStatusColor = (status) => {
     switch(status) {
-      case 'moving': return '#22c55e'
-      case 'parked': return '#f59e0b'
-      case 'alert': return '#ef4444'
-      case 'idle': return '#94a3b8'
-      default: return '#3b82f6'
+      case 'active': return '#22c55e'
+      case 'expiring_soon': return '#f59e0b'
+      case 'expired': return '#ef4444'
+      default: return '#94a3b8'
     }
   }
 
   const getStatusText = (status) => {
     switch(status) {
-      case 'moving': return 'Moving'
-      case 'parked': return 'Parked'
-      case 'alert': return '⚠ Alert'
-      case 'idle': return 'Idle'
+      case 'active': return '✅ Active'
+      case 'expiring_soon': return '⚠️ Expiring'
+      case 'expired': return '❌ Expired'
       default: return status || 'Unknown'
     }
   }
 
-  const tabs = ['All Vehicles', 'Moving', 'Parked', 'Alerts']
+  const tabs = ['All', 'Active', 'Expiring', 'Expired']
   const filteredVehicles = activeTab === 'all' 
     ? vehicles 
-    : vehicles.filter(v => v.status === activeTab)
+    : vehicles.filter(v => v.tracker_status === activeTab.toLowerCase())
 
   if (loading) {
     return (
@@ -214,6 +233,7 @@ const ExecutiveDashboard = () => {
           </div>
           <div className="sidebar-item" onClick={() => navigate('/live-tracking')}>
             <span className="sidebar-icon">📍</span>Live Tracking
+            <span className="sidebar-badge">LIVE</span>
           </div>
           <div className="sidebar-item" onClick={() => setShowAddModal(true)}>
             <span className="sidebar-icon">➕</span>Add Tracker
@@ -230,11 +250,11 @@ const ExecutiveDashboard = () => {
         {/* Main Content */}
         <main className="dash-main">
           <div className="dash-topbar">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
               <div className="topbar-title">📊 Executive Dashboard</div>
               <div className="live-badge">
                 <div className="live-dot"></div>
-                LIVE · Updated just now
+                LIVE · {vehicles.length} vehicles
               </div>
             </div>
             <div className="topbar-controls">
@@ -270,6 +290,25 @@ const ExecutiveDashboard = () => {
                 </div>
               </div>
               <div className="kpi-card">
+                <div className="kpi-label">Expiring Soon</div>
+                <div className="kpi-val yellow">{stats.expiringSoon}</div>
+                <div className="kpi-sub">Need attention</div>
+              </div>
+              <div className="kpi-card">
+                <div className="kpi-label">Expired</div>
+                <div className="kpi-val red">{stats.expiredTrackers}</div>
+                <div className="kpi-sub">Require recharge</div>
+              </div>
+              <div className="kpi-card">
+                <div className="kpi-label">Monthly Revenue</div>
+                <div className="kpi-val blue">{formatCurrency(stats.monthlyRevenue)}</div>
+                <div className="kpi-sub">This month</div>
+              </div>
+            </div>
+
+            {/* Second Row KPI */}
+            <div className="kpi-bar second-row">
+              <div className="kpi-card">
                 <div className="kpi-label">Total Revenue</div>
                 <div className="kpi-val blue">{formatCurrency(stats.totalRevenue)}</div>
                 <div className="kpi-sub">All time</div>
@@ -277,7 +316,7 @@ const ExecutiveDashboard = () => {
               <div className="kpi-card">
                 <div className="kpi-label">Total Recharges</div>
                 <div className="kpi-val yellow">{stats.totalRecharges}</div>
-                <div className="kpi-sub">Tracker recharges</div>
+                <div className="kpi-sub">All time</div>
               </div>
               <div className={`kpi-card ${balance !== null ? 'has-balance' : ''}`}>
                 <div className="kpi-label">Peyflex Balance</div>
@@ -292,82 +331,77 @@ const ExecutiveDashboard = () => {
               </div>
             </div>
 
-            {/* Map + Vehicle Panel */}
-            <div className="map-row">
-              <div className="map-container">
-                <RealtimeMap 
-                  vehicles={vehicles}
-                  selectedVehicle={selectedVehicle}
-                  onMarkerClick={(vehicle) => setSelectedVehicle(vehicle)}
-                />
+            {/* Vehicle Status Table */}
+            <div className="vehicles-section">
+              <div className="section-header">
+                <h3>🚗 Vehicle Tracker Status</h3>
+                <div className="vp-count">{vehicles.length} total</div>
+              </div>
+              
+              <div className="vp-filters">
+                {tabs.map(tab => (
+                  <button
+                    key={tab}
+                    className={`vp-filter ${activeTab === tab.toLowerCase() ? 'active' : ''}`}
+                    onClick={() => setActiveTab(tab.toLowerCase())}
+                  >
+                    {tab}
+                  </button>
+                ))}
               </div>
 
-              {/* Vehicle List Panel */}
-              <div className="vehicle-panel">
-                <div className="vp-header">
-                  <div className="vp-title">Fleet Vehicles</div>
-                  <div className="vp-count">{vehicles.length} total</div>
-                </div>
-                <div className="vp-filters">
-                  {tabs.map(tab => (
-                    <button
-                      key={tab}
-                      className={`vp-filter ${activeTab === tab.toLowerCase().replace(' ', '') ? 'active' : ''}`}
-                      onClick={() => setActiveTab(tab.toLowerCase().replace(' ', ''))}
-                    >
-                      {tab}
-                    </button>
-                  ))}
-                </div>
-                <div className="vehicle-list">
-                  {filteredVehicles.length === 0 ? (
-                    <div className="no-vehicles">
-                      <p>No vehicles found</p>
-                    </div>
-                  ) : (
-                    filteredVehicles.map(vehicle => (
-                      <div 
-                        key={vehicle.id}
-                        className={`vehicle-item ${selectedVehicle?.id === vehicle.id ? 'selected' : ''}`}
-                        onClick={() => setSelectedVehicle(vehicle)}
-                      >
-                        <div className="vi-top">
-                          <span className="vi-name">{vehicle.vehicle_id}</span>
-                          <span 
-                            className="vi-status"
-                            style={{
-                              background: `${getStatusColor(vehicle.status)}22`,
-                              color: getStatusColor(vehicle.status)
-                            }}
-                          >
-                            {getStatusText(vehicle.status)}
-                          </span>
-                        </div>
-                        <div className="vi-mid">
-                          <span className="vi-info">🚗 {vehicle.name || 'Unnamed'}</span>
-                          <span className="vi-info">{vehicle.speed || 0} km/h</span>
-                        </div>
-                        <div className="vi-info" style={{ marginTop: 3 }}>
-                          📍 {vehicle.latitude && vehicle.longitude 
-                            ? `${vehicle.latitude.toFixed(4)}, ${vehicle.longitude.toFixed(4)}`
-                            : 'No GPS signal'}
-                        </div>
-                        <div className="vi-footer">
-                          <span className="vi-badge">
-                            {vehicle.tracker_status === 'active' ? '✅ Active' : 
-                             vehicle.tracker_status === 'expiring_soon' ? '⚠️ Expiring' : 
-                             vehicle.tracker_status === 'expired' ? '❌ Expired' : 'No plan'}
-                          </span>
-                          <span className="vi-expiry">
-                            {vehicle.tracker_expiry 
-                              ? `Expires: ${new Date(vehicle.tracker_expiry).toLocaleDateString()}`
-                              : 'No expiry'}
-                          </span>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
+              <div className="vehicles-table-container">
+                {filteredVehicles.length === 0 ? (
+                  <p className="no-vehicles">No vehicles found</p>
+                ) : (
+                  <table className="vehicles-table">
+                    <thead>
+                      <tr>
+                        <th>Vehicle ID</th>
+                        <th>Name</th>
+                        <th>Model</th>
+                        <th>Driver</th>
+                        <th>SIM</th>
+                        <th>Status</th>
+                        <th>Plan</th>
+                        <th>Expiry</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredVehicles.map(vehicle => (
+                        <tr key={vehicle.id}>
+                          <td>
+                            <span className="vehicle-id">{vehicle.vehicle_id}</span>
+                          </td>
+                          <td>{vehicle.name || '—'}</td>
+                          <td>{vehicle.model || '—'}</td>
+                          <td>{vehicle.driver_name || 'Unassigned'}</td>
+                          <td className="sim">{vehicle.sim_card_number || '—'}</td>
+                          <td>
+                            <span 
+                              className={`tracker-status ${vehicle.tracker_status}`}
+                              style={{
+                                background: `${getStatusColor(vehicle.tracker_status)}22`,
+                                color: getStatusColor(vehicle.tracker_status)
+                              }}
+                            >
+                              {getStatusText(vehicle.tracker_status)}
+                            </span>
+                          </td>
+                          <td>{vehicle.tracker_plan || '—'}</td>
+                          <td>
+                            <span className={`expiry-date ${vehicle.tracker_expiry ? 
+                              (new Date(vehicle.tracker_expiry) < new Date() ? 'expired' : 'active') : ''}`}>
+                              {vehicle.tracker_expiry 
+                                ? new Date(vehicle.tracker_expiry).toLocaleDateString()
+                                : '—'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
               </div>
             </div>
 
@@ -403,7 +437,7 @@ const ExecutiveDashboard = () => {
                               {tx.status || 'Pending'}
                             </span>
                           </td>
-                          <td className="date">{formatDate(tx.created_at)}</td>
+                          <td className="date">{formatDate(tx.processed_at || tx.created_at)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -423,7 +457,6 @@ const ExecutiveDashboard = () => {
           fetchVehicles()
           fetchDashboardData()
         }}
-        plans={[{ id: 1, name: 'Basic', price: 5000, days: 30 }]}
       />
 
       <style jsx>{`
@@ -457,6 +490,7 @@ const ExecutiveDashboard = () => {
         .dash-layout {
           display: flex;
           height: 100vh;
+          overflow: hidden;
         }
 
         .dash-sidebar {
@@ -545,6 +579,16 @@ const ExecutiveDashboard = () => {
           text-align: center;
         }
 
+        .sidebar-badge {
+          font-size: 8px;
+          color: #22c55e;
+          background: rgba(34, 197, 94, 0.15);
+          padding: 2px 6px;
+          border-radius: 10px;
+          margin-left: auto;
+          animation: pulse 1.5s infinite;
+        }
+
         .dash-main {
           flex: 1;
           overflow-y: auto;
@@ -563,6 +607,9 @@ const ExecutiveDashboard = () => {
           flex-shrink: 0;
           flex-wrap: wrap;
           gap: 12px;
+          position: sticky;
+          top: 0;
+          z-index: 10;
         }
 
         .topbar-title {
@@ -661,6 +708,10 @@ const ExecutiveDashboard = () => {
           gap: 14px;
         }
 
+        .kpi-bar.second-row {
+          grid-template-columns: repeat(3, 1fr);
+        }
+
         .kpi-card {
           background: rgba(6, 14, 30, 0.95);
           border: 1px solid var(--border);
@@ -714,164 +765,7 @@ const ExecutiveDashboard = () => {
           text-decoration: underline;
         }
 
-        .map-row {
-          display: grid;
-          grid-template-columns: 1fr 340px;
-          gap: 16px;
-        }
-
-        .map-container {
-          background: rgba(4, 10, 25, 0.98);
-          border: 1px solid var(--border);
-          border-radius: 14px;
-          overflow: hidden;
-          min-height: 400px;
-        }
-
-        .vehicle-panel {
-          background: rgba(6, 14, 30, 0.95);
-          border: 1px solid var(--border);
-          border-radius: 14px;
-          overflow: hidden;
-          display: flex;
-          flex-direction: column;
-        }
-
-        .vp-header {
-          padding: 14px 16px;
-          border-bottom: 1px solid var(--border);
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        }
-
-        .vp-title {
-          font-family: var(--font-head);
-          font-size: 14px;
-          font-weight: 700;
-          color: var(--white);
-        }
-
-        .vp-count {
-          font-family: var(--font-tech);
-          font-size: 11px;
-          color: var(--blue-neon);
-        }
-
-        .vp-filters {
-          display: flex;
-          gap: 4px;
-          padding: 10px 12px;
-          border-bottom: 1px solid var(--border);
-          flex-wrap: wrap;
-        }
-
-        .vp-filter {
-          background: none;
-          border: 1px solid var(--border);
-          border-radius: 6px;
-          padding: 4px 12px;
-          font-family: var(--font-tech);
-          font-size: 11px;
-          color: var(--silver);
-          cursor: pointer;
-          transition: all 0.2s;
-        }
-
-        .vp-filter:hover {
-          background: rgba(10, 111, 255, 0.1);
-        }
-
-        .vp-filter.active {
-          background: rgba(10, 111, 255, 0.15);
-          border-color: var(--blue-neon);
-          color: var(--blue-neon);
-        }
-
-        .vehicle-list {
-          overflow-y: auto;
-          flex: 1;
-          max-height: 380px;
-          padding: 8px 0;
-        }
-
-        .vehicle-item {
-          padding: 10px 16px;
-          border-bottom: 1px solid rgba(30, 60, 120, 0.15);
-          cursor: pointer;
-          transition: background 0.2s;
-        }
-
-        .vehicle-item:hover {
-          background: rgba(10, 111, 255, 0.06);
-        }
-
-        .vehicle-item.selected {
-          background: rgba(10, 111, 255, 0.1);
-          border-left: 2px solid var(--blue-neon);
-        }
-
-        .vi-top {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 6px;
-        }
-
-        .vi-name {
-          font-family: var(--font-tech);
-          font-size: 13px;
-          font-weight: 700;
-          color: var(--white);
-        }
-
-        .vi-status {
-          font-family: var(--font-tech);
-          font-size: 10px;
-          font-weight: 600;
-          padding: 2px 8px;
-          border-radius: 100px;
-        }
-
-        .vi-mid {
-          display: flex;
-          gap: 16px;
-        }
-
-        .vi-info {
-          font-family: var(--font-tech);
-          font-size: 11px;
-          color: var(--text-muted);
-        }
-
-        .vi-footer {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-top: 6px;
-          padding-top: 6px;
-          border-top: 1px solid rgba(30, 60, 120, 0.1);
-        }
-
-        .vi-badge {
-          font-family: var(--font-tech);
-          font-size: 10px;
-          color: var(--blue-neon);
-        }
-
-        .vi-expiry {
-          font-family: var(--font-tech);
-          font-size: 10px;
-          color: var(--text-muted);
-        }
-
-        .no-vehicles {
-          text-align: center;
-          padding: 40px 20px;
-          color: var(--text-muted);
-        }
-
-        .transactions-section {
+        .vehicles-section {
           background: rgba(6, 14, 30, 0.95);
           border: 1px solid var(--border);
           border-radius: 14px;
@@ -891,6 +785,131 @@ const ExecutiveDashboard = () => {
           font-weight: 700;
           color: var(--white);
           margin: 0;
+        }
+
+        .vp-count {
+          font-family: var(--font-tech);
+          font-size: 12px;
+          color: var(--blue-neon);
+        }
+
+        .vp-filters {
+          display: flex;
+          gap: 8px;
+          margin-bottom: 16px;
+          flex-wrap: wrap;
+        }
+
+        .vp-filter {
+          background: rgba(8, 20, 50, 0.6);
+          border: 1px solid var(--border);
+          border-radius: 20px;
+          padding: 6px 16px;
+          font-family: var(--font-tech);
+          font-size: 12px;
+          color: var(--silver);
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+
+        .vp-filter:hover {
+          background: rgba(10, 111, 255, 0.1);
+        }
+
+        .vp-filter.active {
+          background: rgba(10, 111, 255, 0.15);
+          border-color: var(--blue-neon);
+          color: var(--blue-neon);
+        }
+
+        .vehicles-table-container {
+          overflow-x: auto;
+        }
+
+        .vehicles-table {
+          width: 100%;
+          border-collapse: collapse;
+          font-family: var(--font-tech);
+        }
+
+        .vehicles-table thead th {
+          text-align: left;
+          padding: 10px 12px;
+          color: var(--text-muted);
+          font-size: 10px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          border-bottom: 1px solid var(--border);
+        }
+
+        .vehicles-table tbody td {
+          padding: 10px 12px;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+          font-size: 12px;
+          color: var(--silver);
+        }
+
+        .vehicles-table tbody tr:hover {
+          background: rgba(255, 255, 255, 0.02);
+        }
+
+        .vehicle-id {
+          font-weight: 600;
+          color: var(--white);
+          font-size: 13px;
+        }
+
+        .sim {
+          font-family: monospace;
+          font-size: 11px;
+        }
+
+        .tracker-status {
+          display: inline-block;
+          padding: 3px 10px;
+          border-radius: 20px;
+          font-size: 11px;
+          font-weight: 600;
+        }
+
+        .tracker-status.active {
+          background: rgba(34, 197, 94, 0.15);
+          color: #22c55e;
+        }
+
+        .tracker-status.expiring_soon {
+          background: rgba(245, 158, 11, 0.15);
+          color: #f59e0b;
+        }
+
+        .tracker-status.expired {
+          background: rgba(239, 68, 68, 0.15);
+          color: #ef4444;
+        }
+
+        .expiry-date {
+          font-size: 12px;
+        }
+
+        .expiry-date.active {
+          color: #22c55e;
+        }
+
+        .expiry-date.expired {
+          color: #ef4444;
+        }
+
+        .no-vehicles {
+          text-align: center;
+          padding: 40px 20px;
+          color: var(--text-muted);
+        }
+
+        .transactions-section {
+          background: rgba(6, 14, 30, 0.95);
+          border: 1px solid var(--border);
+          border-radius: 14px;
+          padding: 20px 24px;
         }
 
         .view-all {
@@ -941,13 +960,7 @@ const ExecutiveDashboard = () => {
         }
 
         .transactions-table tbody tr:hover {
-          background: rgba(255, 255, 255, 0.03);
-        }
-
-        .vehicle-id {
-          display: block;
-          font-weight: 600;
-          color: var(--white);
+          background: rgba(255, 255, 255, 0.02);
         }
 
         .vehicle-name {
@@ -992,8 +1005,7 @@ const ExecutiveDashboard = () => {
         /* Responsive */
         @media (max-width: 1024px) {
           .kpi-bar { grid-template-columns: repeat(3, 1fr); }
-          .map-row { grid-template-columns: 1fr; }
-          .vehicle-panel { max-height: 300px; }
+          .kpi-bar.second-row { grid-template-columns: repeat(3, 1fr); }
         }
 
         @media (max-width: 768px) {
@@ -1018,13 +1030,20 @@ const ExecutiveDashboard = () => {
           .tbc { font-size: 11px; padding: 5px 10px; }
           .dash-content { padding: 14px; gap: 14px; }
           .kpi-bar { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+          .kpi-bar.second-row { grid-template-columns: repeat(2, 1fr); }
           .kpi-val { font-size: 22px; }
-          .vehicle-list { max-height: 280px; }
+          .vehicles-section { padding: 14px; }
           .transactions-section { padding: 14px; }
+          .vehicles-table thead th,
+          .vehicles-table tbody td {
+            padding: 8px 10px;
+            font-size: 11px;
+          }
         }
 
         @media (max-width: 480px) {
           .kpi-bar { grid-template-columns: 1fr; }
+          .kpi-bar.second-row { grid-template-columns: 1fr; }
         }
       `}</style>
     </div>

@@ -2,33 +2,177 @@ import React, { useState, useEffect, useRef } from 'react'
 import TrackerMap from './TrackerMap'
 import { locationService } from '../../services/locationService'
 import { vehicleService } from '../../services/vehicleService'
-import { twilioService } from '../../services/twilioService'
+import smsService from '../../services/smsService'
 
 const RealtimeMap = () => {
   const [vehicles, setVehicles] = useState([])
   const [selectedVehicle, setSelectedVehicle] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
   const [commandLoading, setCommandLoading] = useState(false)
+  const [commandStatus, setCommandStatus] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [showVehicleList, setShowVehicleList] = useState(true)
+  const [liveLocations, setLiveLocations] = useState({})
+  
+  // Refs to avoid closure issues
+  const subscriptionRef = useRef(null)
+  const pollingCleanupRef = useRef(null)
+  const vehiclesRef = useRef([]) // <-- NEW: Ref to hold latest vehicles
+
+  /**
+   * Normalize phone number for comparison
+   * Converts +2348128200008 -> 08128200008
+   */
+  const normalizePhone = (num) => {
+    if (!num) return '';
+    let cleaned = num.replace(/[+\s-]/g, '');
+    if (cleaned.startsWith('234')) {
+      cleaned = '0' + cleaned.substring(3);
+    }
+    if (cleaned.startsWith('0')) {
+      return cleaned;
+    }
+    return cleaned;
+  };
+
+  // Update ref whenever vehicles change
+  useEffect(() => {
+    vehiclesRef.current = vehicles;
+  }, [vehicles]);
 
   useEffect(() => {
-    loadAllVehicles()
-  }, [])
+    loadAllVehicles();
+    
+    // Subscribe to real-time updates from Supabase
+    const subscription = vehicleService.subscribeToVehicles((payload) => {
+      console.log('📡 Real-time vehicle update:', payload)
+      loadAllVehicles()
+    })
+    
+    subscriptionRef.current = subscription
+    
+    // Start polling for SMS messages with location data
+    const cleanup = smsService.startPollingMessages((locationUpdates) => {
+      console.log('📍 New location updates received:', locationUpdates)
+      
+      // Use the ref to get the latest vehicles
+      const currentVehicles = vehiclesRef.current;
+      console.log('🚗 Current vehicles from ref:', currentVehicles.length);
+      
+      // Process each location update
+      locationUpdates.forEach(update => {
+        const phoneNumber = update.from || '';
+        const normalizedIncoming = normalizePhone(phoneNumber)
+        
+        console.log(`📞 Looking for vehicle with phone: ${normalizedIncoming}`)
+        
+        // Find vehicle by matching normalized phone numbers
+        const vehicle = currentVehicles.find(v => {
+          const vehiclePhone = normalizePhone(v.sim_card_number)
+          return vehiclePhone === normalizedIncoming
+        })
+        
+        if (vehicle) {
+          console.log(`🎯 Found vehicle: ${vehicle.vehicle_id}`)
+          
+          // Update the vehicle's location in state
+          setVehicles(prevVehicles => 
+            prevVehicles.map(v => {
+              if (v.id === vehicle.id) {
+                return {
+                  ...v,
+                  latitude: update.latitude,
+                  longitude: update.longitude,
+                  speed: update.speed || v.speed || 0,
+                  last_update: new Date().toISOString(),
+                  location_source: 'sms',
+                  status: update.speed > 0 ? 'moving' : 'parked'
+                }
+              }
+              return v
+            })
+          )
+          
+          // Store live location separately
+          setLiveLocations(prev => ({
+            ...prev,
+            [vehicle.id]: {
+              latitude: update.latitude,
+              longitude: update.longitude,
+              speed: update.speed || 0,
+              timestamp: update.timestamp,
+              source: 'sms'
+            }
+          }))
+          
+          // Show a notification
+          setCommandStatus({
+            type: 'success',
+            message: `📍 ${vehicle.vehicle_id} location updated: ${update.latitude.toFixed(4)}, ${update.longitude.toFixed(4)}`
+          })
+          setTimeout(() => setCommandStatus(null), 5000)
+        } else {
+          console.log(`⚠️ No vehicle found for phone number: ${phoneNumber} (normalized: ${normalizedIncoming})`)
+          console.log('Available vehicles:', currentVehicles.map(v => ({
+            id: v.id,
+            vehicle_id: v.vehicle_id,
+            sim: v.sim_card_number,
+            normalized: normalizePhone(v.sim_card_number)
+          })))
+        }
+      })
+    }, 3000) // Poll every 3 seconds
+    
+    pollingCleanupRef.current = cleanup
+    
+    // Cleanup function
+    return () => {
+      console.log('🧹 Cleaning up RealtimeMap...')
+      if (subscriptionRef.current) {
+        subscriptionRef.current.unsubscribe()
+      }
+      if (pollingCleanupRef.current) {
+        pollingCleanupRef.current()
+      }
+      smsService.stopPollingMessages()
+    }
+  }, []) // Empty dependency array
 
   const loadAllVehicles = async () => {
     try {
       setLoading(true)
-      // Get all vehicles from database, not just those with locations
+      setError(null)
+      console.log('🔄 Fetching vehicles from Supabase...')
+      
       const allVehicles = await vehicleService.getAllVehicles()
-      console.log('All vehicles loaded:', allVehicles)
+      console.log('📦 Vehicles loaded:', allVehicles?.length || 0, 'vehicles')
+      
+      if (allVehicles && allVehicles.length > 0) {
+        console.log('🔍 Sample vehicle:', allVehicles[0])
+        // Log phone normalization for debugging
+        allVehicles.forEach(v => {
+          console.log(`📱 ${v.vehicle_id}: ${v.sim_card_number} -> ${normalizePhone(v.sim_card_number)}`)
+        })
+      } else {
+        console.warn('⚠️ No vehicles found in database')
+      }
+      
       setVehicles(allVehicles || [])
+      vehiclesRef.current = allVehicles || [] // Update ref immediately
     } catch (error) {
-      console.error('Error loading vehicles:', error)
+      console.error('❌ Error loading vehicles:', error)
+      setError('Failed to load vehicles from database')
+      setVehicles([])
+      vehiclesRef.current = []
     } finally {
       setLoading(false)
     }
+  }
+
+  const handleRefresh = () => {
+    loadAllVehicles()
   }
 
   const handleMarkerClick = (vehicle) => {
@@ -39,85 +183,109 @@ const RealtimeMap = () => {
     setSelectedVehicle(vehicle)
   }
   
-  // NEW: Send command with vehicle password
-  const sendCommandWithPassword = async (command, vehicle, commandName) => {
-    if (!vehicle.sim_card_number) {
-      alert(`⚠️ No SIM card assigned to ${vehicle.vehicle_id}. Please add SIM card number first.`)
-      return
-    }
-    
-    setCommandLoading(true)
-    try {
-      // Use the new twilioService method that fetches password
-      const result = await twilioService.sendCommandWithPassword(vehicle.id, command)
-      
-      if (result.success) {
-        alert(`✅ Command "${commandName}" sent to ${vehicle.vehicle_id} with password`)
-      } else {
-        alert(`❌ Failed to send command: ${result.error || 'Unknown error'}`)
-      }
-    } catch (error) {
-      console.error('Command error:', error)
-      alert(`Failed to send command: ${error.message || 'Please try again.'}`)
-    }
-    setCommandLoading(false)
-  }
-  
-  // NEW: Send custom command with password
-  const sendCustomCommand = async (vehicle, customCommand) => {
-    if (!vehicle.sim_card_number) {
-      alert(`⚠️ No SIM card assigned to ${vehicle.vehicle_id}.`)
-      return
-    }
-    
-    setCommandLoading(true)
-    try {
-      const result = await twilioService.sendCustomCommand(vehicle.id, customCommand)
-      
-      if (result.success) {
-        alert(`✅ Custom command sent to ${vehicle.vehicle_id}`)
-      } else {
-        alert(`❌ Failed: ${result.error || 'Unknown error'}`)
-      }
-    } catch (error) {
-      console.error('Command error:', error)
-      alert(`Failed: ${error.message || 'Please try again.'}`)
-    }
-    setCommandLoading(false)
+  const clearCommandStatus = () => {
+    setTimeout(() => {
+      setCommandStatus(null)
+    }, 5000)
   }
 
-  // Update the getLocation methods to use vehicle ID
-  const sendGetLocation = async (vehicle) => {
+  const sendCommandWithPassword = async (command, vehicle, commandName) => {
     if (!vehicle.sim_card_number) {
-      alert(`⚠️ No SIM card assigned to ${vehicle.vehicle_id}. Please add SIM card number first.`)
+      const msg = `⚠️ No SIM card assigned to ${vehicle.vehicle_id}. Please add SIM card number first.`
+      setCommandStatus({ type: 'error', message: msg })
+      alert(msg)
       return
     }
     
     setCommandLoading(true)
+    setCommandStatus({ type: 'loading', message: `Sending "${commandName}" to ${vehicle.vehicle_id}...` })
+    
     try {
-      // Use vehicle ID - will auto-fetch password
-      const result = await twilioService.getLocation(vehicle.id)
+      const result = await smsService.sendCommandToVehicle(vehicle.id, command)
       
       if (result.success) {
-        alert(`✅ Location request sent to ${vehicle.vehicle_id}`)
+        const msg = `✅ Command "${commandName}" sent to ${vehicle.vehicle_id}`
+        setCommandStatus({ type: 'success', message: msg })
+        alert(msg)
       } else {
-        alert(`❌ Failed: ${result.error || 'Unknown error'}`)
+        const msg = `❌ Failed to send command: ${result.error || 'Unknown error'}`
+        setCommandStatus({ type: 'error', message: msg })
+        alert(msg)
       }
     } catch (error) {
       console.error('Command error:', error)
-      alert(`Failed: ${error.message || 'Please try again.'}`)
+      const msg = `Failed to send command: ${error.message || 'Please try again.'}`
+      setCommandStatus({ type: 'error', message: msg })
+      alert(msg)
     }
     setCommandLoading(false)
+    clearCommandStatus()
   }
   
-  const getStatusIcon = (status) => {
-    switch(status) {
-      case 'moving': return '🟢'
-      case 'parked': return '🟡'
-      case 'alert': return '🔴'
-      case 'idle': return '⚪'
-      default: return '🔵'
+  const sendCustomCommand = async (vehicle, customCommand) => {
+    if (!vehicle.sim_card_number) {
+      const msg = `⚠️ No SIM card assigned to ${vehicle.vehicle_id}.`
+      setCommandStatus({ type: 'error', message: msg })
+      alert(msg)
+      return
     }
+    
+    setCommandLoading(true)
+    setCommandStatus({ type: 'loading', message: `Sending custom command to ${vehicle.vehicle_id}...` })
+    
+    try {
+      const result = await smsService.sendCommandToVehicle(vehicle.id, customCommand)
+      
+      if (result.success) {
+        const msg = `✅ Custom command sent to ${vehicle.vehicle_id}`
+        setCommandStatus({ type: 'success', message: msg })
+        alert(msg)
+      } else {
+        const msg = `❌ Failed: ${result.error || 'Unknown error'}`
+        setCommandStatus({ type: 'error', message: msg })
+        alert(msg)
+      }
+    } catch (error) {
+      console.error('Command error:', error)
+      const msg = `Failed: ${error.message || 'Please try again.'}`
+      setCommandStatus({ type: 'error', message: msg })
+      alert(msg)
+    }
+    setCommandLoading(false)
+    clearCommandStatus()
+  }
+
+  const sendGetLocation = async (vehicle) => {
+    if (!vehicle.sim_card_number) {
+      const msg = `⚠️ No SIM card assigned to ${vehicle.vehicle_id}. Please add SIM card number first.`
+      setCommandStatus({ type: 'error', message: msg })
+      alert(msg)
+      return
+    }
+    
+    setCommandLoading(true)
+    setCommandStatus({ type: 'loading', message: `Requesting location for ${vehicle.vehicle_id}...` })
+    
+    try {
+      const result = await smsService.getLocationForVehicle(vehicle.id)
+      
+      if (result.success) {
+        const msg = `✅ Location request sent to ${vehicle.vehicle_id}. Waiting for response...`
+        setCommandStatus({ type: 'success', message: msg })
+        alert(msg)
+      } else {
+        const msg = `❌ Failed: ${result.error || 'Unknown error'}`
+        setCommandStatus({ type: 'error', message: msg })
+        alert(msg)
+      }
+    } catch (error) {
+      console.error('Command error:', error)
+      const msg = `Failed: ${error.message || 'Please try again.'}`
+      setCommandStatus({ type: 'error', message: msg })
+      alert(msg)
+    }
+    setCommandLoading(false)
+    clearCommandStatus()
   }
   
   const getStatusColor = (status) => {
@@ -127,16 +295,6 @@ const RealtimeMap = () => {
       case 'alert': return '#ef4444'
       case 'idle': return '#94a3b8'
       default: return '#3b82f6'
-    }
-  }
-  
-  const getStatusText = (status) => {
-    switch(status) {
-      case 'moving': return 'Moving'
-      case 'parked': return 'Parked'
-      case 'alert': return 'Alert'
-      case 'idle': return 'Idle'
-      default: return status || 'Unknown'
     }
   }
   
@@ -161,12 +319,15 @@ const RealtimeMap = () => {
     noLocation: vehicles.filter(v => !v.latitude).length
   }
 
+  // ... rest of the component (loading, error, and return with styles) remains the same ...
+  // Keep all the JSX from your existing component below this line
+
   if (loading) {
     return (
       <div className="loading-container">
         <div className="spinner"></div>
         <p>Loading fleet data...</p>
-        <style jsx>{`
+        <style>{`
           .loading-container {
             display: flex;
             flex-direction: column;
@@ -175,14 +336,14 @@ const RealtimeMap = () => {
             padding: 60px;
             background: rgba(6, 14, 30, 0.95);
             border-radius: 16px;
-            color: var(--white);
+            color: white;
             min-height: 400px;
           }
           .spinner {
             width: 48px;
             height: 48px;
             border: 3px solid rgba(10, 111, 255, 0.2);
-            border-top-color: var(--blue-neon);
+            border-top-color: #0a6fff;
             border-radius: 50%;
             animation: spin 1s linear infinite;
             margin-bottom: 20px;
@@ -195,8 +356,61 @@ const RealtimeMap = () => {
     )
   }
 
+  if (error) {
+    return (
+      <div className="error-container">
+        <div className="error-icon">⚠️</div>
+        <h3>Error Loading Vehicles</h3>
+        <p>{error}</p>
+        <p style={{ fontSize: '12px', color: '#94a3b8', marginTop: '8px' }}>
+          {vehicles.length === 0 ? 'No vehicles found in database.' : `${vehicles.length} vehicles loaded.`}
+        </p>
+        <button onClick={handleRefresh} className="retry-btn">
+          🔄 Retry
+        </button>
+        <style>{`
+          .error-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 60px;
+            background: rgba(6, 14, 30, 0.95);
+            border-radius: 16px;
+            color: white;
+            min-height: 400px;
+          }
+          .error-icon { font-size: 48px; margin-bottom: 20px; }
+          .error-container h3 { color: #ef4444; margin-bottom: 10px; }
+          .error-container p { color: #94a3b8; margin-bottom: 20px; }
+          .retry-btn {
+            background: #0a6fff;
+            color: white;
+            border: none;
+            padding: 10px 30px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s;
+          }
+          .retry-btn:hover { transform: scale(1.05); }
+        `}</style>
+      </div>
+    )
+  }
+
   return (
     <div className="realtime-map-container">
+      {/* Command Status Toast */}
+      {commandStatus && (
+        <div className={`command-toast ${commandStatus.type}`}>
+          {commandStatus.type === 'loading' && '⏳'}
+          {commandStatus.type === 'success' && '✅'}
+          {commandStatus.type === 'error' && '❌'}
+          <span>{commandStatus.message}</span>
+        </div>
+      )}
+
       <div className="map-layout">
         {/* Map Section */}
         <div className="map-section">
@@ -260,36 +474,52 @@ const RealtimeMap = () => {
                     <button className="clear-search" onClick={() => setSearchTerm('')}>✕</button>
                   )}
                 </div>
-                <div className="status-filters">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                  <div className="status-filters">
+                    <button 
+                      className={`filter-btn ${statusFilter === 'all' ? 'active' : ''}`}
+                      onClick={() => setStatusFilter('all')}
+                    >
+                      All <span className="filter-count">{statusCounts.all}</span>
+                    </button>
+                    <button 
+                      className={`filter-btn moving ${statusFilter === 'moving' ? 'active' : ''}`}
+                      onClick={() => setStatusFilter('moving')}
+                    >
+                      <span className="dot green"></span> Moving <span className="filter-count">{statusCounts.moving}</span>
+                    </button>
+                    <button 
+                      className={`filter-btn parked ${statusFilter === 'parked' ? 'active' : ''}`}
+                      onClick={() => setStatusFilter('parked')}
+                    >
+                      <span className="dot yellow"></span> Parked <span className="filter-count">{statusCounts.parked}</span>
+                    </button>
+                    <button 
+                      className={`filter-btn alert ${statusFilter === 'alert' ? 'active' : ''}`}
+                      onClick={() => setStatusFilter('alert')}
+                    >
+                      <span className="dot red"></span> Alert <span className="filter-count">{statusCounts.alert}</span>
+                    </button>
+                    <button 
+                      className={`filter-btn idle ${statusFilter === 'idle' ? 'active' : ''}`}
+                      onClick={() => setStatusFilter('idle')}
+                    >
+                      <span className="dot gray"></span> Idle <span className="filter-count">{statusCounts.idle}</span>
+                    </button>
+                  </div>
                   <button 
-                    className={`filter-btn ${statusFilter === 'all' ? 'active' : ''}`}
-                    onClick={() => setStatusFilter('all')}
+                    onClick={handleRefresh} 
+                    style={{
+                      background: '#0a6fff',
+                      color: 'white',
+                      border: 'none',
+                      padding: '4px 12px',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      fontSize: '11px'
+                    }}
                   >
-                    All <span className="filter-count">{statusCounts.all}</span>
-                  </button>
-                  <button 
-                    className={`filter-btn moving ${statusFilter === 'moving' ? 'active' : ''}`}
-                    onClick={() => setStatusFilter('moving')}
-                  >
-                    <span className="dot green"></span> Moving <span className="filter-count">{statusCounts.moving}</span>
-                  </button>
-                  <button 
-                    className={`filter-btn parked ${statusFilter === 'parked' ? 'active' : ''}`}
-                    onClick={() => setStatusFilter('parked')}
-                  >
-                    <span className="dot yellow"></span> Parked <span className="filter-count">{statusCounts.parked}</span>
-                  </button>
-                  <button 
-                    className={`filter-btn alert ${statusFilter === 'alert' ? 'active' : ''}`}
-                    onClick={() => setStatusFilter('alert')}
-                  >
-                    <span className="dot red"></span> Alert <span className="filter-count">{statusCounts.alert}</span>
-                  </button>
-                  <button 
-                    className={`filter-btn idle ${statusFilter === 'idle' ? 'active' : ''}`}
-                    onClick={() => setStatusFilter('idle')}
-                  >
-                    <span className="dot gray"></span> Idle <span className="filter-count">{statusCounts.idle}</span>
+                    🔄 Refresh
                   </button>
                 </div>
               </div>
@@ -300,180 +530,214 @@ const RealtimeMap = () => {
                   <div className="no-vehicles">
                     <div className="no-vehicles-icon">🚛</div>
                     <p>No vehicles found</p>
-                    <p className="no-vehicles-hint">Try adjusting your search or filters</p>
+                    <p className="no-vehicles-hint">
+                      {vehicles.length === 0 
+                        ? 'Add vehicles in the Tracker Management page' 
+                        : 'Try adjusting your search or filters'}
+                    </p>
+                    {vehicles.length === 0 && (
+                      <button 
+                        onClick={handleRefresh} 
+                        className="refresh-btn"
+                        style={{
+                          marginTop: '12px',
+                          background: '#0a6fff',
+                          color: 'white',
+                          border: 'none',
+                          padding: '8px 20px',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          fontSize: '12px'
+                        }}
+                      >
+                        🔄 Refresh
+                      </button>
+                    )}
                   </div>
                 ) : (
-                  filteredVehicles.map(vehicle => (
-                    <div 
-                      key={vehicle.id}
-                      className={`vehicle-card ${selectedVehicle?.id === vehicle.id ? 'selected' : ''}`}
-                      onClick={() => handleVehicleSelect(vehicle)}
-                    >
-                      <div className="vehicle-header">
-                        <div className="vehicle-info-left">
-                          <div className="vehicle-status-indicator">
-                            <span 
-                              className="status-dot"
-                              style={{ background: getStatusColor(vehicle.status) }}
-                            ></span>
+                  filteredVehicles.map(vehicle => {
+                    const liveLocation = liveLocations[vehicle.id];
+                    const hasLiveLocation = vehicle.latitude && vehicle.longitude;
+                    
+                    return (
+                      <div 
+                        key={vehicle.id}
+                        className={`vehicle-card ${selectedVehicle?.id === vehicle.id ? 'selected' : ''} ${liveLocation ? 'has-live-location' : ''}`}
+                        onClick={() => handleVehicleSelect(vehicle)}
+                      >
+                        <div className="vehicle-header">
+                          <div className="vehicle-info-left">
+                            <div className="vehicle-status-indicator">
+                              <span 
+                                className="status-dot"
+                                style={{ background: getStatusColor(vehicle.status) }}
+                              ></span>
+                            </div>
+                            <div>
+                              <div className="vehicle-id">
+                                {vehicle.vehicle_id}
+                                {liveLocation && <span className="live-badge">● LIVE</span>}
+                              </div>
+                              <div className="vehicle-name">{vehicle.name}</div>
+                            </div>
                           </div>
-                          <div>
-                            <div className="vehicle-id">{vehicle.vehicle_id}</div>
-                            <div className="vehicle-name">{vehicle.name}</div>
-                          </div>
-                        </div>
-                        <div className="vehicle-badges">
-                          {vehicle.tracker_status === 'active' && (
-                            <span className="badge active">● Active</span>
-                          )}
-                          {vehicle.tracker_status === 'expiring_soon' && (
-                            <span className="badge warning">⚠ Expiring</span>
-                          )}
-                          {vehicle.tracker_status === 'expired' && (
-                            <span className="badge expired">✕ Expired</span>
-                          )}
-                          {!vehicle.latitude && (
-                            <span className="badge no-location">📍 No Signal</span>
-                          )}
-                        </div>
-                      </div>
-                      
-                      {/* Vehicle Details */}
-                      <div className="vehicle-details">
-                        <div className="detail-grid">
-                          <div className="detail-item">
-                            <span className="detail-icon">🚗</span>
-                            <span className="detail-label">Model</span>
-                            <span className="detail-value">{vehicle.model || '—'}</span>
-                          </div>
-                          <div className="detail-item">
-                            <span className="detail-icon">👤</span>
-                            <span className="detail-label">Driver</span>
-                            <span className="detail-value">{vehicle.driver_name || 'Unassigned'}</span>
-                          </div>
-                          <div className="detail-item">
-                            <span className="detail-icon">📱</span>
-                            <span className="detail-label">SIM</span>
-                            <span className="detail-value">{vehicle.sim_card_number || 'Not set'}</span>
-                          </div>
-                          <div className="detail-item">
-                            <span className="detail-icon">⚡</span>
-                            <span className="detail-label">Speed</span>
-                            <span className="detail-value" style={{ color: vehicle.speed > 80 ? '#ef4444' : '#22c55e' }}>
-                              {vehicle.speed || 0} km/h
-                            </span>
-                          </div>
-                          <div className="detail-item">
-                            <span className="detail-icon">🕐</span>
-                            <span className="detail-label">Last Update</span>
-                            <span className="detail-value">
-                              {vehicle.last_update ? new Date(vehicle.last_update).toLocaleTimeString() : 'Never'}
-                            </span>
-                          </div>
-                          <div className="detail-item">
-                            <span className="detail-icon">📍</span>
-                            <span className="detail-label">Location</span>
-                            <span className="detail-value location">
-                              {vehicle.latitude && vehicle.longitude 
-                                ? `${vehicle.latitude.toFixed(4)}, ${vehicle.longitude.toFixed(4)}`
-                                : 'No GPS signal'}
-                            </span>
-                          </div>
-                          <div className="detail-item full-width">
-                            <span className="detail-icon">🔑</span>
-                            <span className="detail-label">Password</span>
-                            <span className="detail-value" style={{ color: 'var(--blue-neon)' }}>
-                              {vehicle.tracker_password || '123456'}
-                            </span>
+                          <div className="vehicle-badges">
+                            {vehicle.tracker_status === 'active' && (
+                              <span className="badge active">● Active</span>
+                            )}
+                            {vehicle.tracker_status === 'expiring_soon' && (
+                              <span className="badge warning">⚠ Expiring</span>
+                            )}
+                            {vehicle.tracker_status === 'expired' && (
+                              <span className="badge expired">✕ Expired</span>
+                            )}
+                            {!hasLiveLocation && (
+                              <span className="badge no-location">📍 No Signal</span>
+                            )}
+                            {hasLiveLocation && (
+                              <span className="badge location-found">📍 Live</span>
+                            )}
                           </div>
                         </div>
+                        
+                        {/* Vehicle Details */}
+                        <div className="vehicle-details">
+                          <div className="detail-grid">
+                            <div className="detail-item">
+                              <span className="detail-icon">🚗</span>
+                              <span className="detail-label">Model</span>
+                              <span className="detail-value">{vehicle.model || '—'}</span>
+                            </div>
+                            <div className="detail-item">
+                              <span className="detail-icon">👤</span>
+                              <span className="detail-label">Driver</span>
+                              <span className="detail-value">{vehicle.driver_name || 'Unassigned'}</span>
+                            </div>
+                            <div className="detail-item">
+                              <span className="detail-icon">📱</span>
+                              <span className="detail-label">SIM</span>
+                              <span className="detail-value">{vehicle.sim_card_number || 'Not set'}</span>
+                            </div>
+                            <div className="detail-item">
+                              <span className="detail-icon">⚡</span>
+                              <span className="detail-label">Speed</span>
+                              <span className="detail-value" style={{ color: (vehicle.speed || 0) > 80 ? '#ef4444' : '#22c55e' }}>
+                                {(vehicle.speed || 0)} km/h
+                                {liveLocation && <span className="source-badge">SMS</span>}
+                              </span>
+                            </div>
+                            <div className="detail-item">
+                              <span className="detail-icon">🕐</span>
+                              <span className="detail-label">Last Update</span>
+                              <span className="detail-value">
+                                {vehicle.last_update ? new Date(vehicle.last_update).toLocaleTimeString() : 'Never'}
+                              </span>
+                            </div>
+                            <div className="detail-item">
+                              <span className="detail-icon">📍</span>
+                              <span className="detail-label">Location</span>
+                              <span className="detail-value location" style={{ color: hasLiveLocation ? '#22c55e' : '#94a3b8' }}>
+                                {hasLiveLocation 
+                                  ? `${vehicle.latitude.toFixed(4)}, ${vehicle.longitude.toFixed(4)}`
+                                  : 'No GPS signal'}
+                              </span>
+                            </div>
+                            <div className="detail-item full-width">
+                              <span className="detail-icon">🔑</span>
+                              <span className="detail-label">Password</span>
+                              <span className="detail-value" style={{ color: '#0a6fff' }}>
+                                {vehicle.tracker_password || '123456'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                        
+                        {/* Action Buttons */}
+                        <div className="vehicle-actions">
+                          <button 
+                            className="action-btn location"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              sendGetLocation(vehicle)
+                            }}
+                            disabled={commandLoading || !vehicle.sim_card_number}
+                            title="Request current location"
+                          >
+                            📍 Get Location
+                          </button>
+                          <button 
+                            className="action-btn stop"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              sendCommandWithPassword('cutoil', vehicle, 'STOP ENGINE')
+                            }}
+                            disabled={commandLoading || !vehicle.sim_card_number}
+                            title="Emergency engine shutdown"
+                          >
+                            🛑 Stop
+                          </button>
+                          <button 
+                            className="action-btn start"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              sendCommandWithPassword('resume', vehicle, 'START ENGINE')
+                            }}
+                            disabled={commandLoading || !vehicle.sim_card_number}
+                            title="Restart engine"
+                          >
+                            ▶️ Start
+                          </button>
+                          <button 
+                            className="action-btn status"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              sendCommandWithPassword('status', vehicle, 'GET STATUS')
+                            }}
+                            disabled={commandLoading || !vehicle.sim_card_number}
+                            title="Get tracker status"
+                          >
+                            📊 Status
+                          </button>
+                        </div>
+                        
+                        {/* Custom Command Input */}
+                        <div className="custom-command">
+                          <input
+                            type="text"
+                            id={`custom-command-${vehicle.id}`}
+                            placeholder="Custom command (e.g., interval,60)"
+                            className="custom-command-input"
+                            disabled={commandLoading || !vehicle.sim_card_number}
+                          />
+                          <button
+                            className="action-btn custom"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              const input = document.getElementById(`custom-command-${vehicle.id}`)
+                              const command = input?.value.trim()
+                              if (command) {
+                                sendCustomCommand(vehicle, command)
+                                input.value = ''
+                              }
+                            }}
+                            disabled={commandLoading || !vehicle.sim_card_number}
+                            title="Send custom command with password"
+                          >
+                            Send
+                          </button>
+                        </div>
+                        
+                        <div className="vehicle-footer">
+                          <span className="plan-badge">{vehicle.tracker_plan || 'No plan'}</span>
+                          <span className="expiry-info">
+                            {vehicle.tracker_expiry 
+                              ? `Expires: ${new Date(vehicle.tracker_expiry).toLocaleDateString()}`
+                              : 'No expiry date'}
+                          </span>
+                        </div>
                       </div>
-                      
-                      {/* Action Buttons */}
-                      <div className="vehicle-actions">
-                        <button 
-                          className="action-btn location"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            sendGetLocation(vehicle)
-                          }}
-                          disabled={commandLoading || !vehicle.sim_card_number}
-                          title="Request current location"
-                        >
-                          📍 Get Location
-                        </button>
-                        <button 
-                          className="action-btn stop"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            sendCommandWithPassword('cutoil', vehicle, 'STOP ENGINE')
-                          }}
-                          disabled={commandLoading || !vehicle.sim_card_number}
-                          title="Emergency engine shutdown"
-                        >
-                          🛑 Stop
-                        </button>
-                        <button 
-                          className="action-btn start"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            sendCommandWithPassword('resume', vehicle, 'START ENGINE')
-                          }}
-                          disabled={commandLoading || !vehicle.sim_card_number}
-                          title="Restart engine"
-                        >
-                          ▶️ Start
-                        </button>
-                        <button 
-                          className="action-btn status"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            sendCommandWithPassword('status', vehicle, 'GET STATUS')
-                          }}
-                          disabled={commandLoading || !vehicle.sim_card_number}
-                          title="Get tracker status"
-                        >
-                          📊 Status
-                        </button>
-                      </div>
-                      
-                      {/* Custom Command Input */}
-                      <div className="custom-command">
-                        <input
-                          type="text"
-                          id={`custom-command-${vehicle.id}`}
-                          placeholder="Custom command (e.g., interval,60)"
-                          className="custom-command-input"
-                          disabled={commandLoading || !vehicle.sim_card_number}
-                        />
-                        <button
-                          className="action-btn custom"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            const input = document.getElementById(`custom-command-${vehicle.id}`)
-                            const command = input?.value.trim()
-                            if (command) {
-                              sendCustomCommand(vehicle, command)
-                              input.value = ''
-                            }
-                          }}
-                          disabled={commandLoading || !vehicle.sim_card_number}
-                          title="Send custom command with password"
-                        >
-                          Send
-                        </button>
-                      </div>
-                      
-                      <div className="vehicle-footer">
-                        <span className="plan-badge">{vehicle.tracker_plan || 'No plan'}</span>
-                        <span className="expiry-info">
-                          {vehicle.tracker_expiry 
-                            ? `Expires: ${new Date(vehicle.tracker_expiry).toLocaleDateString()}`
-                            : 'No expiry date'}
-                        </span>
-                      </div>
-                    </div>
-                  ))
+                    )
+                  })
                 )}
               </div>
             </>
@@ -486,6 +750,43 @@ const RealtimeMap = () => {
           width: 100%;
           height: 100%;
           min-height: 70vh;
+          position: relative;
+        }
+        .command-toast {
+          position: fixed;
+          top: 80px;
+          right: 20px;
+          padding: 12px 20px;
+          border-radius: 8px;
+          color: white;
+          z-index: 9999;
+          animation: slideIn 0.3s ease;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          font-size: 14px;
+          font-weight: 500;
+          max-width: 400px;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+        .command-toast.loading {
+          background: linear-gradient(135deg, #1e3a5f, #0a6fff);
+        }
+        .command-toast.success {
+          background: linear-gradient(135deg, #059669, #10b981);
+        }
+        .command-toast.error {
+          background: linear-gradient(135deg, #dc2626, #ef4444);
+        }
+        @keyframes slideIn {
+          from {
+            transform: translateX(100%);
+            opacity: 0;
+          }
+          to {
+            transform: translateX(0);
+            opacity: 1;
+          }
         }
         .map-layout {
           display: flex;
@@ -533,17 +834,17 @@ const RealtimeMap = () => {
           filter: drop-shadow(0 0 4px rgba(0, 195, 255, 0.5));
         }
         .header-title h3 {
-          font-family: var(--font-head);
+          font-family: var(--font-head, sans-serif);
           font-size: 18px;
           font-weight: 700;
-          color: var(--white);
+          color: white;
           margin: 0;
           letter-spacing: 0.5px;
         }
         .vehicle-count {
-          font-family: var(--font-tech);
+          font-family: var(--font-tech, monospace);
           font-size: 11px;
-          color: var(--blue-neon);
+          color: #0a6fff;
           background: rgba(10, 111, 255, 0.15);
           padding: 4px 10px;
           border-radius: 20px;
@@ -552,7 +853,7 @@ const RealtimeMap = () => {
         .toggle-btn {
           background: rgba(10, 111, 255, 0.15);
           border: 1px solid rgba(10, 111, 255, 0.3);
-          color: var(--blue-neon);
+          color: #0a6fff;
           width: 32px;
           height: 32px;
           border-radius: 8px;
@@ -578,16 +879,16 @@ const RealtimeMap = () => {
         }
         .stat-value {
           display: block;
-          font-family: var(--font-display);
+          font-family: var(--font-display, sans-serif);
           font-size: 24px;
           font-weight: 700;
-          color: var(--white);
+          color: white;
         }
         .stat-label {
           display: block;
-          font-family: var(--font-tech);
+          font-family: var(--font-tech, monospace);
           font-size: 10px;
-          color: var(--text-muted);
+          color: #94a3b8;
           text-transform: uppercase;
           letter-spacing: 0.5px;
           margin-top: 4px;
@@ -598,7 +899,7 @@ const RealtimeMap = () => {
         }
         .search-box {
           position: relative;
-          margin-bottom: 16px;
+          margin-bottom: 12px;
         }
         .search-icon {
           position: absolute;
@@ -614,18 +915,18 @@ const RealtimeMap = () => {
           border: 1px solid rgba(10, 111, 255, 0.2);
           border-radius: 10px;
           padding: 10px 12px 10px 36px;
-          color: var(--white);
-          font-family: var(--font-tech);
+          color: white;
+          font-family: var(--font-tech, monospace);
           font-size: 13px;
           transition: all 0.2s;
         }
         .search-box input:focus {
           outline: none;
-          border-color: var(--blue-neon);
+          border-color: #0a6fff;
           box-shadow: 0 0 0 2px rgba(10, 111, 255, 0.1);
         }
         .search-box input::placeholder {
-          color: var(--text-muted);
+          color: #94a3b8;
         }
         .clear-search {
           position: absolute;
@@ -634,7 +935,7 @@ const RealtimeMap = () => {
           transform: translateY(-50%);
           background: none;
           border: none;
-          color: var(--text-muted);
+          color: #94a3b8;
           cursor: pointer;
           font-size: 14px;
         }
@@ -648,10 +949,10 @@ const RealtimeMap = () => {
           border: 1px solid rgba(10, 111, 255, 0.2);
           border-radius: 20px;
           padding: 6px 14px;
-          font-family: var(--font-tech);
+          font-family: var(--font-tech, monospace);
           font-size: 12px;
           font-weight: 500;
-          color: var(--silver);
+          color: #94a3b8;
           cursor: pointer;
           transition: all 0.2s;
           display: inline-flex;
@@ -663,8 +964,8 @@ const RealtimeMap = () => {
         }
         .filter-btn.active {
           background: rgba(10, 111, 255, 0.2);
-          border-color: var(--blue-neon);
-          color: var(--blue-neon);
+          border-color: #0a6fff;
+          color: #0a6fff;
         }
         .filter-btn.moving.active {
           background: rgba(34, 197, 94, 0.12);
@@ -725,6 +1026,10 @@ const RealtimeMap = () => {
           cursor: pointer;
           transition: all 0.2s;
         }
+        .vehicle-card.has-live-location {
+          border-color: rgba(34, 197, 94, 0.4);
+          box-shadow: 0 0 20px rgba(34, 197, 94, 0.05);
+        }
         .vehicle-card:hover {
           background: rgba(10, 111, 255, 0.1);
           border-color: rgba(10, 111, 255, 0.35);
@@ -732,7 +1037,7 @@ const RealtimeMap = () => {
         }
         .vehicle-card.selected {
           background: rgba(10, 111, 255, 0.12);
-          border-color: var(--blue-neon);
+          border-color: #0a6fff;
           box-shadow: 0 0 0 1px rgba(10, 111, 255, 0.2);
         }
         .vehicle-header {
@@ -758,16 +1063,28 @@ const RealtimeMap = () => {
           animation: pulse 1.5s infinite;
         }
         .vehicle-id {
-          font-family: var(--font-head);
+          font-family: var(--font-head, sans-serif);
           font-size: 15px;
           font-weight: 700;
-          color: var(--white);
+          color: white;
           letter-spacing: 0.5px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .live-badge {
+          font-size: 9px;
+          color: #22c55e;
+          background: rgba(34, 197, 94, 0.15);
+          padding: 2px 6px;
+          border-radius: 10px;
+          border: 1px solid rgba(34, 197, 94, 0.3);
+          animation: pulse 1.5s infinite;
         }
         .vehicle-name {
-          font-family: var(--font-tech);
+          font-family: var(--font-tech, monospace);
           font-size: 11px;
-          color: var(--text-muted);
+          color: #94a3b8;
           margin-top: 2px;
         }
         .vehicle-badges {
@@ -776,7 +1093,7 @@ const RealtimeMap = () => {
           flex-wrap: wrap;
         }
         .badge {
-          font-family: var(--font-tech);
+          font-family: var(--font-tech, monospace);
           font-size: 9px;
           padding: 3px 8px;
           border-radius: 12px;
@@ -803,6 +1120,19 @@ const RealtimeMap = () => {
           color: #94a3b8;
           border: 1px solid rgba(100, 116, 139, 0.3);
         }
+        .badge.location-found {
+          background: rgba(34, 197, 94, 0.15);
+          color: #22c55e;
+          border: 1px solid rgba(34, 197, 94, 0.3);
+        }
+        .source-badge {
+          font-size: 8px;
+          color: #0a6fff;
+          background: rgba(10, 111, 255, 0.1);
+          padding: 1px 4px;
+          border-radius: 4px;
+          margin-left: 4px;
+        }
         .detail-grid {
           display: grid;
           grid-template-columns: repeat(2, 1fr);
@@ -816,7 +1146,7 @@ const RealtimeMap = () => {
           display: flex;
           align-items: center;
           gap: 6px;
-          font-family: var(--font-tech);
+          font-family: var(--font-tech, monospace);
           font-size: 11px;
         }
         .detail-icon {
@@ -825,10 +1155,10 @@ const RealtimeMap = () => {
           width: 20px;
         }
         .detail-label {
-          color: var(--text-muted);
+          color: #94a3b8;
         }
         .detail-value {
-          color: var(--silver);
+          color: #94a3b8;
           margin-left: auto;
         }
         .detail-value.location {
@@ -849,10 +1179,10 @@ const RealtimeMap = () => {
           min-width: 60px;
           background: rgba(10, 111, 255, 0.12);
           border: none;
-          color: var(--blue-neon);
+          color: #0a6fff;
           padding: 6px 8px;
           border-radius: 8px;
-          font-family: var(--font-tech);
+          font-family: var(--font-tech, monospace);
           font-size: 11px;
           font-weight: 500;
           cursor: pointer;
@@ -880,7 +1210,7 @@ const RealtimeMap = () => {
           flex: 0.5;
           min-width: 50px;
           background: rgba(10, 111, 255, 0.15);
-          color: var(--blue-neon);
+          color: #0a6fff;
         }
         .action-btn:disabled {
           opacity: 0.4;
@@ -897,18 +1227,18 @@ const RealtimeMap = () => {
           border: 1px solid rgba(10, 111, 255, 0.15);
           border-radius: 8px;
           padding: 6px 10px;
-          color: var(--white);
-          font-family: var(--font-tech);
+          color: white;
+          font-family: var(--font-tech, monospace);
           font-size: 11px;
           outline: none;
           transition: all 0.2s;
         }
         .custom-command-input:focus {
-          border-color: var(--blue-neon);
+          border-color: #0a6fff;
           box-shadow: 0 0 0 2px rgba(10, 111, 255, 0.1);
         }
         .custom-command-input::placeholder {
-          color: var(--text-muted);
+          color: #94a3b8;
         }
         .vehicle-footer {
           display: flex;
@@ -916,22 +1246,22 @@ const RealtimeMap = () => {
           align-items: center;
           padding-top: 10px;
           border-top: 1px solid rgba(10, 111, 255, 0.1);
-          font-family: var(--font-tech);
+          font-family: var(--font-tech, monospace);
           font-size: 10px;
         }
         .plan-badge {
-          color: var(--blue-neon);
+          color: #0a6fff;
           background: rgba(10, 111, 255, 0.1);
           padding: 2px 8px;
           border-radius: 10px;
         }
         .expiry-info {
-          color: var(--text-muted);
+          color: #94a3b8;
         }
         .no-vehicles {
           text-align: center;
           padding: 60px 20px;
-          color: var(--text-muted);
+          color: #94a3b8;
         }
         .no-vehicles-icon {
           font-size: 48px;
@@ -971,6 +1301,14 @@ const RealtimeMap = () => {
           .action-btn {
             min-width: 45px;
             font-size: 10px;
+          }
+          .command-toast {
+            top: 70px;
+            right: 10px;
+            left: 10px;
+            max-width: none;
+            font-size: 12px;
+            padding: 10px 16px;
           }
         }
       `}</style>
