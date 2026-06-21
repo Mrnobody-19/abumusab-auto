@@ -24,10 +24,29 @@ const LiveTracking = () => {
   const [lastCommandResult, setLastCommandResult] = useState(null)
   const [isRefreshing, setIsRefreshing] = useState(false)
   
+  const [isMobile, setIsMobile] = useState(false)
+  const [mobileView, setMobileView] = useState('fleet')
+  const [autoOpenMap, setAutoOpenMap] = useState(false)
+  
   const vehiclesRef = useRef([])
   const subscriptionRef = useRef(null)
   const pollingCleanupRef = useRef(null)
   const sidebarRef = useRef(null)
+
+  useEffect(() => {
+    const checkMobile = () => {
+      const mobile = window.innerWidth <= 768
+      setIsMobile(mobile)
+      if (mobile) {
+        setMobileView('fleet')
+      } else {
+        setMobileView('map')
+      }
+    }
+    checkMobile()
+    window.addEventListener('resize', checkMobile)
+    return () => window.removeEventListener('resize', checkMobile)
+  }, [])
 
   const normalizePhone = (num) => {
     if (!num) return '';
@@ -102,9 +121,15 @@ const LiveTracking = () => {
           
           setSelectedVehicle(vehicle)
           
+          if (isMobile) {
+            setAutoOpenMap(true)
+            setMobileView('map')
+            setTimeout(() => setAutoOpenMap(false), 2000)
+          }
+          
           setCommandStatus({
             type: 'success',
-            message: `📍 ${vehicle.vehicle_id} location updated: ${update.latitude.toFixed(4)}, ${update.longitude.toFixed(4)}`
+            message: `📍 ${vehicle.vehicle_id} location updated`
           })
           setTimeout(() => setCommandStatus(null), 5000)
         }
@@ -122,7 +147,7 @@ const LiveTracking = () => {
       }
       smsService.stopPollingMessages()
     }
-  }, [])
+  }, [isMobile])
 
   const loadAllVehicles = async () => {
     try {
@@ -162,107 +187,55 @@ const LiveTracking = () => {
 
   const handleMarkerClick = (vehicle) => {
     setSelectedVehicle(vehicle)
+    if (isMobile) {
+      setMobileView('map')
+    }
   }
 
   const sendGetLocation = async (vehicle) => {
     if (!vehicle.sim_card_number) {
-      setLastCommandResult({
-        type: 'error',
-        message: `⚠️ No SIM card assigned to ${vehicle.vehicle_id}`
-      })
-      setTimeout(() => setLastCommandResult(null), 5000)
       alert(`⚠️ No SIM card assigned to ${vehicle.vehicle_id}`)
       return
     }
     
     setCommandLoading(true)
-    setCommandStatus({ type: 'loading', message: `Requesting location for ${vehicle.vehicle_id}...` })
-    setLastCommandResult({ type: 'loading', message: `📡 Sending location request to ${vehicle.vehicle_id}...` })
+    setCommandStatus({ type: 'loading', message: `Requesting location...` })
     
     try {
       const result = await smsService.getLocationForVehicle(vehicle.id)
       if (result.success) {
-        setLastCommandResult({
-          type: 'success',
-          message: `✅ Location request sent to ${vehicle.vehicle_id}`,
-          details: `Command: position${vehicle.tracker_password || '123456'} → ${vehicle.sim_card_number}`
-        })
-        setCommandStatus({ type: 'success', message: `✅ Location request sent to ${vehicle.vehicle_id}` })
+        setCommandStatus({ type: 'success', message: `✅ Location request sent` })
       } else {
-        setLastCommandResult({
-          type: 'error',
-          message: `❌ Failed: ${result.error}`,
-          details: 'Check SIM card and network connectivity'
-        })
         setCommandStatus({ type: 'error', message: `❌ Failed: ${result.error}` })
       }
     } catch (error) {
-      setLastCommandResult({
-        type: 'error',
-        message: `❌ Failed: ${error.message}`,
-        details: 'Check LibreSMS connection'
-      })
       setCommandStatus({ type: 'error', message: `❌ Failed: ${error.message}` })
     }
     setCommandLoading(false)
-    setTimeout(() => {
-      setCommandStatus(null)
-      if (lastCommandResult?.type !== 'loading') {
-        // Keep result visible
-      }
-    }, 5000)
+    setTimeout(() => setCommandStatus(null), 5000)
   }
 
   const sendCommand = async (command, vehicle, commandName) => {
     if (!vehicle.sim_card_number) {
-      setLastCommandResult({
-        type: 'error',
-        message: `⚠️ No SIM card assigned to ${vehicle.vehicle_id}`
-      })
-      setTimeout(() => setLastCommandResult(null), 5000)
       alert(`⚠️ No SIM card assigned to ${vehicle.vehicle_id}`)
       return
     }
     
     setCommandLoading(true)
     setCommandStatus({ type: 'loading', message: `Sending ${commandName}...` })
-    setLastCommandResult({ type: 'loading', message: `📡 Sending ${commandName} command to ${vehicle.vehicle_id}...` })
     
     try {
       const result = await smsService.sendCommandToVehicle(vehicle.id, command)
       if (result.success) {
-        const commandMap = {
-          'cutoil': 'Engine STOP',
-          'resume': 'Engine START',
-          'status': 'Status Request'
-        }
-        setLastCommandResult({
-          type: 'success',
-          message: `✅ ${commandName} sent to ${vehicle.vehicle_id}`,
-          details: `Command: ${command}${vehicle.tracker_password || '123456'} → ${vehicle.sim_card_number}`,
-          command: commandMap[command] || commandName
-        })
-        setCommandStatus({ type: 'success', message: `✅ ${commandName} sent to ${vehicle.vehicle_id}` })
+        setCommandStatus({ type: 'success', message: `✅ ${commandName} sent` })
       } else {
-        setLastCommandResult({
-          type: 'error',
-          message: `❌ Failed: ${result.error}`,
-          details: 'Check SIM card and network connectivity'
-        })
         setCommandStatus({ type: 'error', message: `❌ Failed: ${result.error}` })
       }
     } catch (error) {
-      setLastCommandResult({
-        type: 'error',
-        message: `❌ Failed: ${error.message}`,
-        details: 'Check LibreSMS connection'
-      })
       setCommandStatus({ type: 'error', message: `❌ Failed: ${error.message}` })
     }
     setCommandLoading(false)
-    setTimeout(() => {
-      setCommandStatus(null)
-    }, 5000)
+    setTimeout(() => setCommandStatus(null), 5000)
   }
 
   const getStatusColor = (status) => {
@@ -272,26 +245,6 @@ const LiveTracking = () => {
       case 'alert': return '#ef4444'
       case 'idle': return '#94a3b8'
       default: return '#3b82f6'
-    }
-  }
-
-  const getStatusIcon = (status) => {
-    switch(status) {
-      case 'moving': return '🚗'
-      case 'parked': return '🅿️'
-      case 'alert': return '⚠️'
-      case 'idle': return '💤'
-      default: return '📍'
-    }
-  }
-
-  const getStatusDescription = (status) => {
-    switch(status) {
-      case 'moving': return 'Vehicle is in motion'
-      case 'parked': return 'Vehicle is stationary'
-      case 'alert': return 'Emergency/Alert condition'
-      case 'idle': return 'Vehicle is idle'
-      default: return 'Unknown status'
     }
   }
 
@@ -326,6 +279,14 @@ const LiveTracking = () => {
     document.removeEventListener('mouseup', handleResizeEnd)
   }
 
+  const switchMobileView = (view) => {
+    setMobileView(view)
+    if (view === 'map') {
+      setAutoOpenMap(true)
+      setTimeout(() => setAutoOpenMap(false), 1000)
+    }
+  }
+
   if (loading) {
     return (
       <div className="loading-container">
@@ -336,9 +297,6 @@ const LiveTracking = () => {
             <div className="spinner-ring"></div>
           </div>
           <p className="loading-text">Loading fleet data...</p>
-          <div className="loading-bar">
-            <div className="loading-progress"></div>
-          </div>
         </div>
         <style>{`
           .loading-container {
@@ -346,12 +304,10 @@ const LiveTracking = () => {
             align-items: center;
             justify-content: center;
             height: 100vh;
-            background: radial-gradient(ellipse at center, #0a1628, #030912);
+            background: #030912;
             color: white;
           }
-          .loading-content {
-            text-align: center;
-          }
+          .loading-content { text-align: center; }
           .loading-spinner {
             position: relative;
             width: 60px;
@@ -387,27 +343,6 @@ const LiveTracking = () => {
             color: #94a3b8;
             font-size: 14px;
             letter-spacing: 2px;
-            margin-bottom: 20px;
-          }
-          .loading-bar {
-            width: 200px;
-            height: 2px;
-            background: rgba(10, 111, 255, 0.1);
-            border-radius: 2px;
-            overflow: hidden;
-            margin: 0 auto;
-          }
-          .loading-progress {
-            height: 100%;
-            width: 0%;
-            background: linear-gradient(90deg, #0a6fff, #00c3ff);
-            border-radius: 2px;
-            animation: progress 1.5s ease-in-out infinite;
-          }
-          @keyframes progress {
-            0% { width: 0%; }
-            50% { width: 70%; }
-            100% { width: 100%; }
           }
         `}</style>
       </div>
@@ -429,122 +364,99 @@ const LiveTracking = () => {
         </div>
       )}
 
-      {/* Main Layout - Side by Side */}
-      <div className="main-layout">
-        {/* Map Section */}
-        <div className="map-section">
-          {vehicles.length > 0 ? (
-            <TrackerMap 
-              vehicles={vehicles}
-              selectedVehicle={selectedVehicle}
-              onMarkerClick={handleMarkerClick}
-            />
-          ) : (
-            <div className="no-vehicles-map">
-              <div className="no-vehicles-content">
-                <div className="empty-icon">🚛</div>
-                <h3>No Vehicles Found</h3>
-                <p>Add vehicles in the Tracker Management page to start tracking</p>
-                <button onClick={handleRefresh} className="refresh-btn">
-                  <span className="btn-icon">⟳</span> Refresh
+      {!isMobile ? (
+        /* ====== DESKTOP LAYOUT ====== */
+        <div className="main-layout">
+          <div className="map-section">
+            {vehicles.length > 0 ? (
+              <TrackerMap 
+                vehicles={vehicles}
+                selectedVehicle={selectedVehicle}
+                onMarkerClick={handleMarkerClick}
+              />
+            ) : (
+              <div className="no-vehicles-map">
+                <div className="no-vehicles-content">
+                  <div className="empty-icon">🚛</div>
+                  <h3>No Vehicles Found</h3>
+                  <p>Add vehicles to start tracking</p>
+                  <button onClick={handleRefresh} className="refresh-btn">Refresh</button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Fleet Command Center - Desktop */}
+          <div 
+            className="sidebar"
+            style={{ width: showSidebar ? sidebarWidth : 0 }}
+          >
+            {showSidebar && (
+              <div 
+                className="resize-handle"
+                onMouseDown={handleResizeStart}
+              >
+                <div className="resize-line"></div>
+              </div>
+            )}
+
+            {/* Header */}
+            <div className="sidebar-header">
+              <div className="sidebar-title">
+                <span className="title-icon">🚛</span>
+                <div>
+                  <h2>Fleet Command</h2>
+                  <span className="title-sub">Real-time monitoring & control</span>
+                </div>
+              </div>
+              <div className="header-actions">
+                <button 
+                  className="close-sidebar"
+                  onClick={() => setShowSidebar(false)}
+                >
+                  ✕
                 </button>
               </div>
             </div>
-          )}
-        </div>
 
-        {/* Fleet Command Center Sidebar */}
-        <div 
-          className={`sidebar ${!showSidebar ? 'closed' : ''}`}
-          style={{ width: showSidebar ? sidebarWidth : 0 }}
-          ref={sidebarRef}
-        >
-          {showSidebar && (
-            <div 
-              className="resize-handle"
-              onMouseDown={handleResizeStart}
-              title="Drag to resize"
-            >
-              <div className="resize-line"></div>
-            </div>
-          )}
-
-          {/* Header */}
-          <div className="sidebar-header">
-            <div className="sidebar-title">
-              <span className="title-icon">🚛</span>
-              <div>
-                <h2>Fleet Command Center</h2>
-                <span className="title-sub">Real-time vehicle monitoring & control</span>
+            {/* Stats Grid */}
+            <div className="stats-grid-modern">
+              <div className="stat-card-modern">
+                <span className="stat-number">{selectedStats?.total || 0}</span>
+                <span className="stat-label-modern">Total Fleet</span>
+              </div>
+              <div className="stat-card-modern">
+                <span className="stat-number" style={{ color: '#22c55e' }}>{selectedStats?.online || 0}</span>
+                <span className="stat-label-modern">Online</span>
+              </div>
+              <div className="stat-card-modern">
+                <span className="stat-number" style={{ color: '#22c55e' }}>{selectedStats?.moving || 0}</span>
+                <span className="stat-label-modern">Moving</span>
+              </div>
+              <div className="stat-card-modern">
+                <span className="stat-number" style={{ color: '#f59e0b' }}>{selectedStats?.parked || 0}</span>
+                <span className="stat-label-modern">Parked</span>
               </div>
             </div>
-            <div className="header-actions">
-              <button 
-                className="close-sidebar"
-                onClick={() => setShowSidebar(false)}
-                title="Hide sidebar"
-              >
-                ✕
-              </button>
-            </div>
-          </div>
 
-          {/* Stats Dashboard */}
-          <div className="stats-dashboard">
-            <div className="stats-grid">
-              <div className="stat-card total">
-                <div className="stat-icon">📊</div>
-                <div className="stat-info">
-                  <span className="stat-value">{selectedStats?.total || 0}</span>
-                  <span className="stat-label">Total Fleet</span>
-                </div>
+            {/* Tracker Status */}
+            <div className="tracker-status-modern">
+              <div className="status-chip">
+                <span className="chip-dot active"></span>
+                Active <span className="chip-count">{selectedStats?.active || 0}</span>
               </div>
-              <div className="stat-card online">
-                <div className="stat-icon">📡</div>
-                <div className="stat-info">
-                  <span className="stat-value">{selectedStats?.online || 0}</span>
-                  <span className="stat-label">Online</span>
-                </div>
+              <div className="status-chip">
+                <span className="chip-dot expiring"></span>
+                Expiring <span className="chip-count">{selectedStats?.expiring || 0}</span>
               </div>
-              <div className="stat-card moving">
-                <div className="stat-icon">🚗</div>
-                <div className="stat-info">
-                  <span className="stat-value">{selectedStats?.moving || 0}</span>
-                  <span className="stat-label">Moving</span>
-                </div>
-              </div>
-              <div className="stat-card parked">
-                <div className="stat-icon">🅿️</div>
-                <div className="stat-info">
-                  <span className="stat-value">{selectedStats?.parked || 0}</span>
-                  <span className="stat-label">Parked</span>
-                </div>
+              <div className="status-chip">
+                <span className="chip-dot expired"></span>
+                Expired <span className="chip-count">{selectedStats?.expired || 0}</span>
               </div>
             </div>
-          </div>
 
-          {/* Tracker Status */}
-          <div className="tracker-status-bar">
-            <div className="status-item">
-              <span className="status-dot active"></span>
-              <span className="status-label">Active</span>
-              <span className="status-count">{selectedStats?.active || 0}</span>
-            </div>
-            <div className="status-item">
-              <span className="status-dot expiring"></span>
-              <span className="status-label">Expiring</span>
-              <span className="status-count">{selectedStats?.expiring || 0}</span>
-            </div>
-            <div className="status-item">
-              <span className="status-dot expired"></span>
-              <span className="status-label">Expired</span>
-              <span className="status-count">{selectedStats?.expired || 0}</span>
-            </div>
-          </div>
-
-          {/* Search */}
-          <div className="sidebar-search">
-            <div className="search-wrapper">
+            {/* Search */}
+            <div className="search-modern">
               <span className="search-icon">🔍</span>
               <input
                 type="text"
@@ -556,210 +468,346 @@ const LiveTracking = () => {
                 <button className="search-clear" onClick={() => setSearchTerm('')}>✕</button>
               )}
             </div>
-          </div>
 
-          {/* Filters */}
-          <div className="sidebar-filters">
-            <button 
-              className={`filter-btn ${statusFilter === 'all' ? 'active' : ''}`}
-              onClick={() => setStatusFilter('all')}
-            >
-              All <span className="filter-count">{vehicles.length}</span>
-            </button>
-            <button 
-              className={`filter-btn moving ${statusFilter === 'moving' ? 'active' : ''}`}
-              onClick={() => setStatusFilter('moving')}
-            >
-              <span className="dot green"></span> Moving <span className="filter-count">{selectedStats?.moving || 0}</span>
-            </button>
-            <button 
-              className={`filter-btn parked ${statusFilter === 'parked' ? 'active' : ''}`}
-              onClick={() => setStatusFilter('parked')}
-            >
-              <span className="dot yellow"></span> Parked <span className="filter-count">{selectedStats?.parked || 0}</span>
-            </button>
-            <button 
-              className={`filter-btn alert ${statusFilter === 'alert' ? 'active' : ''}`}
-              onClick={() => setStatusFilter('alert')}
-            >
-              <span className="dot red"></span> Alert <span className="filter-count">{selectedStats?.alert || 0}</span>
-            </button>
-          </div>
+            {/* Filters */}
+            <div className="filters-modern">
+              <button 
+                className={`filter-modern ${statusFilter === 'all' ? 'active' : ''}`}
+                onClick={() => setStatusFilter('all')}
+              >
+                All <span className="filter-count">{vehicles.length}</span>
+              </button>
+              <button 
+                className={`filter-modern moving ${statusFilter === 'moving' ? 'active' : ''}`}
+                onClick={() => setStatusFilter('moving')}
+              >
+                <span className="dot green"></span> Moving
+              </button>
+              <button 
+                className={`filter-modern parked ${statusFilter === 'parked' ? 'active' : ''}`}
+                onClick={() => setStatusFilter('parked')}
+              >
+                <span className="dot yellow"></span> Parked
+              </button>
+              <button 
+                className={`filter-modern alert ${statusFilter === 'alert' ? 'active' : ''}`}
+                onClick={() => setStatusFilter('alert')}
+              >
+                <span className="dot red"></span> Alert
+              </button>
+            </div>
 
-          {/* Vehicle List */}
-          <div className="vehicle-list">
-            {filteredVehicles.length === 0 ? (
-              <div className="empty-state">
-                <span className="empty-icon">🔍</span>
-                <p>No vehicles found</p>
-                <span className="empty-hint">Try adjusting your search or filters</span>
-              </div>
-            ) : (
-              filteredVehicles.map(vehicle => {
-                const hasLiveLocation = vehicle.latitude && vehicle.longitude
-                const isSelected = selectedVehicle?.id === vehicle.id
-                const isHovered = hoveredVehicle?.id === vehicle.id
-                const statusColor = getStatusColor(vehicle.status)
-                const statusIcon = getStatusIcon(vehicle.status)
-                const statusDesc = getStatusDescription(vehicle.status)
-                
-                return (
-                  <div 
-                    key={vehicle.id}
-                    className={`vehicle-item ${isSelected ? 'selected' : ''} ${hasLiveLocation ? 'has-location' : ''} ${isHovered ? 'hovered' : ''}`}
-                    onClick={() => {
-                      handleMarkerClick(vehicle)
-                      const el = document.getElementById(`vehicle-${vehicle.id}`)
-                      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                    }}
-                    onMouseEnter={() => setHoveredVehicle(vehicle)}
-                    onMouseLeave={() => setHoveredVehicle(null)}
-                    id={`vehicle-${vehicle.id}`}
-                    style={{
-                      borderColor: isSelected ? statusColor : hasLiveLocation ? 'rgba(34, 197, 94, 0.15)' : 'rgba(10, 111, 255, 0.06)',
-                      boxShadow: isSelected ? `0 0 20px ${statusColor}33` : 'none'
-                    }}
-                  >
-                    <div className="vehicle-info">
-                      <div className="vehicle-status">
-                        <span 
-                          className="status-dot" 
-                          style={{ background: statusColor }}
-                        ></span>
-                        <span className="vehicle-id">{vehicle.vehicle_id}</span>
-                        {hasLiveLocation ? (
-                          <span className="live-badge">● LIVE</span>
-                        ) : (
-                          <span className="offline-badge">○ OFFLINE</span>
-                        )}
-                        {vehicle.speed > 80 && <span className="speed-warning" title="Speeding!">⚡</span>}
-                      </div>
-                      <div className="vehicle-details">
-                        <span className="vehicle-name">{vehicle.name || 'Unnamed'}</span>
-                        <span className="vehicle-driver">👤 {vehicle.driver_name || 'No driver'}</span>
-                        <span className="vehicle-speed" style={{ color: vehicle.speed > 80 ? '#ef4444' : '#22c55e' }}>
-                          ⚡ {vehicle.speed || 0} km/h
+            {/* Vehicle List */}
+            <div className="vehicle-list-modern">
+              {filteredVehicles.length === 0 ? (
+                <div className="empty-state">
+                  <p>No vehicles found</p>
+                </div>
+              ) : (
+                filteredVehicles.map(vehicle => {
+                  const hasLiveLocation = vehicle.latitude && vehicle.longitude
+                  const isSelected = selectedVehicle?.id === vehicle.id
+                  const statusColor = getStatusColor(vehicle.status)
+                  const statusIcon = vehicle.status === 'moving' ? '🚗' : 
+                                   vehicle.status === 'parked' ? '🅿️' : 
+                                   vehicle.status === 'alert' ? '⚠️' : '💤'
+                  
+                  return (
+                    <div 
+                      key={vehicle.id}
+                      className={`vehicle-card-modern ${isSelected ? 'selected' : ''} ${hasLiveLocation ? 'online' : 'offline'}`}
+                      onClick={() => handleMarkerClick(vehicle)}
+                      style={{
+                        borderColor: isSelected ? statusColor : 'transparent'
+                      }}
+                    >
+                      <div className="vehicle-card-header">
+                        <div className="vehicle-name-id">
+                          <span className="status-dot-modern" style={{ background: statusColor }}></span>
+                          <span className="vehicle-id-modern">{vehicle.vehicle_id}</span>
+                          <span className="status-badge-modern">{hasLiveLocation ? 'ONLINE' : 'OFFLINE'}</span>
+                        </div>
+                        <span className="vehicle-speed-modern" style={{ color: vehicle.speed > 80 ? '#ef4444' : '#22c55e' }}>
+                          {vehicle.speed || 0} km/h
                         </span>
                       </div>
-                      <div className="vehicle-status-text">
-                        <span className="status-icon">{statusIcon}</span>
-                        <span className="status-desc">{statusDesc}</span>
+                      <div className="vehicle-card-body">
+                        <span className="vehicle-name">{vehicle.name || 'Unnamed'}</span>
+                        <span className="vehicle-driver">👤 {vehicle.driver_name || 'No driver'}</span>
+                      </div>
+                      <div className="vehicle-status-text-modern">
+                        <span>{statusIcon}</span>
+                        <span>
+                          {vehicle.status === 'moving' ? 'Vehicle is moving' : 
+                           vehicle.status === 'parked' ? 'Vehicle is stationary' : 
+                           vehicle.status === 'alert' ? 'Emergency condition' : 'Vehicle is idle'}
+                        </span>
                       </div>
                       {hasLiveLocation && (
-                        <div className="vehicle-coords">
+                        <div className="vehicle-coords-modern">
                           📍 {vehicle.latitude.toFixed(4)}, {vehicle.longitude.toFixed(4)}
                         </div>
                       )}
-                      <div className="vehicle-meta">
-                        <span className="meta-item">📱 {vehicle.sim_card_number || 'No SIM'}</span>
-                        <span className="meta-item">🔑 {vehicle.tracker_password || '123456'}</span>
-                        <span className="meta-item">📅 {vehicle.tracker_expiry ? new Date(vehicle.tracker_expiry).toLocaleDateString() : 'No expiry'}</span>
+                      <div className="vehicle-meta-modern">
+                        <span>📱 {vehicle.sim_card_number || 'No SIM'}</span>
+                        <span>🔑 {vehicle.tracker_password || '123456'}</span>
+                        <span>📅 {vehicle.tracker_expiry ? new Date(vehicle.tracker_expiry).toLocaleDateString() : 'No expiry'}</span>
+                      </div>
+                      <div className="vehicle-actions-modern">
+                        <button 
+                          className="action-modern location"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            sendGetLocation(vehicle)
+                          }}
+                          disabled={commandLoading || !vehicle.sim_card_number}
+                        >
+                          📍 Get Location
+                        </button>
+                        <button 
+                          className="action-modern stop"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            sendCommand('cutoil', vehicle, 'STOP')
+                          }}
+                          disabled={commandLoading || !vehicle.sim_card_number}
+                        >
+                          🛑 Stop
+                        </button>
+                        <button 
+                          className="action-modern start"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            sendCommand('resume', vehicle, 'START')
+                          }}
+                          disabled={commandLoading || !vehicle.sim_card_number}
+                        >
+                          ▶️ Start
+                        </button>
+                        <button 
+                          className="action-modern status"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            sendCommand('status', vehicle, 'STATUS')
+                          }}
+                          disabled={commandLoading || !vehicle.sim_card_number}
+                        >
+                          📊 Status
+                        </button>
                       </div>
                     </div>
-                    <div className="vehicle-actions">
-                      <button 
-                        className="action-btn location"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          sendGetLocation(vehicle)
-                        }}
-                        disabled={commandLoading || !vehicle.sim_card_number}
-                        title="Request current location"
-                      >
-                        📍 Get Location
-                      </button>
-                      <button 
-                        className="action-btn stop"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          sendCommand('cutoil', vehicle, 'STOP')
-                        }}
-                        disabled={commandLoading || !vehicle.sim_card_number}
-                        title="Emergency engine shutdown"
-                      >
-                        🛑 Stop
-                      </button>
-                      <button 
-                        className="action-btn start"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          sendCommand('resume', vehicle, 'START')
-                        }}
-                        disabled={commandLoading || !vehicle.sim_card_number}
-                        title="Restart engine"
-                      >
-                        ▶️ Start
-                      </button>
-                      <button 
-                        className="action-btn status"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          sendCommand('status', vehicle, 'STATUS')
-                        }}
-                        disabled={commandLoading || !vehicle.sim_card_number}
-                        title="Get tracker status"
-                      >
-                        📊 Status
-                      </button>
-                    </div>
-                  </div>
-                )
-              })
-            )}
-          </div>
-          
-          {/* Footer */}
-          <div className="sidebar-footer">
-            <div className="footer-left">
-              <span className="footer-text">© 2026 Fleet Tracker</span>
-              <span className="footer-divider">|</span>
-              <span className="footer-version">v2.0</span>
+                  )
+                })
+              )}
             </div>
-            <div className="footer-right">
-              <button 
-                className={`refresh-btn-small ${isRefreshing ? 'spinning' : ''}`}
-                onClick={handleRefresh}
-                title="Refresh fleet data"
-              >
-                ⟳
-              </button>
-              <span className="footer-status">
-                <span className="status-dot-small online"></span>
-                {vehicles.filter(v => v.latitude).length} online
-              </span>
+
+            {/* Footer */}
+            <div className="sidebar-footer-modern">
+              <span>© 2026 Fleet Tracker</span>
+              <span className="footer-version-modern">v2.0</span>
             </div>
           </div>
         </div>
+      ) : (
+        /* ====== MOBILE LAYOUT ====== */
+        <div className="mobile-layout">
+          <div className="mobile-header">
+            <div className="mobile-title">
+              <span className="title-icon">🚛</span>
+              <span>Fleet Command</span>
+            </div>
+            <button className="mobile-refresh" onClick={handleRefresh}>⟳</button>
+          </div>
 
-        {/* Show Sidebar Button */}
-        {!showSidebar && (
+          <div className="mobile-tabs">
+            <button 
+              className={`mobile-tab ${mobileView === 'fleet' ? 'active' : ''}`}
+              onClick={() => switchMobileView('fleet')}
+            >
+              📋 Fleet ({vehicles.length})
+            </button>
+            <button 
+              className={`mobile-tab ${mobileView === 'map' ? 'active' : ''}`}
+              onClick={() => switchMobileView('map')}
+            >
+              🗺️ Map
+            </button>
+          </div>
+
+          <div className="mobile-content">
+            {mobileView === 'fleet' && (
+              <div className="mobile-fleet">
+                <div className="mobile-stats">
+                  <div className="mobile-stat">
+                    <span className="mobile-stat-value">{selectedStats?.total || 0}</span>
+                    <span className="mobile-stat-label">Total</span>
+                  </div>
+                  <div className="mobile-stat">
+                    <span className="mobile-stat-value" style={{ color: '#22c55e' }}>{selectedStats?.online || 0}</span>
+                    <span className="mobile-stat-label">Online</span>
+                  </div>
+                  <div className="mobile-stat">
+                    <span className="mobile-stat-value" style={{ color: '#22c55e' }}>{selectedStats?.moving || 0}</span>
+                    <span className="mobile-stat-label">Moving</span>
+                  </div>
+                  <div className="mobile-stat">
+                    <span className="mobile-stat-value" style={{ color: '#f59e0b' }}>{selectedStats?.parked || 0}</span>
+                    <span className="mobile-stat-label">Parked</span>
+                  </div>
+                </div>
+
+                <div className="mobile-search">
+                  <input
+                    type="text"
+                    placeholder="Search vehicles..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
+                  {searchTerm && (
+                    <button className="mobile-search-clear" onClick={() => setSearchTerm('')}>✕</button>
+                  )}
+                </div>
+
+                <div className="mobile-filters">
+                  <button 
+                    className={`mobile-filter ${statusFilter === 'all' ? 'active' : ''}`}
+                    onClick={() => setStatusFilter('all')}
+                  >All</button>
+                  <button 
+                    className={`mobile-filter ${statusFilter === 'moving' ? 'active' : ''}`}
+                    onClick={() => setStatusFilter('moving')}
+                  >Moving</button>
+                  <button 
+                    className={`mobile-filter ${statusFilter === 'parked' ? 'active' : ''}`}
+                    onClick={() => setStatusFilter('parked')}
+                  >Parked</button>
+                  <button 
+                    className={`mobile-filter ${statusFilter === 'alert' ? 'active' : ''}`}
+                    onClick={() => setStatusFilter('alert')}
+                  >Alert</button>
+                </div>
+
+                <div className="mobile-vehicle-list">
+                  {filteredVehicles.map(vehicle => {
+                    const hasLiveLocation = vehicle.latitude && vehicle.longitude
+                    const statusColor = getStatusColor(vehicle.status)
+                    
+                    return (
+                      <div 
+                        key={vehicle.id}
+                        className="mobile-vehicle-item"
+                        onClick={() => {
+                          handleMarkerClick(vehicle)
+                          switchMobileView('map')
+                        }}
+                      >
+                        <div className="mobile-vehicle-header">
+                          <div className="mobile-vehicle-id">
+                            <span className="status-dot" style={{ background: statusColor }}></span>
+                            {vehicle.vehicle_id}
+                            {hasLiveLocation && <span className="live-badge">●</span>}
+                          </div>
+                          <span className="mobile-vehicle-speed">{vehicle.speed || 0} km/h</span>
+                        </div>
+                        <div className="mobile-vehicle-details">
+                          <span>{vehicle.name || 'Unnamed'}</span>
+                          <span>👤 {vehicle.driver_name || 'No driver'}</span>
+                        </div>
+                        <div className="mobile-vehicle-actions">
+                          <button 
+                            className="mobile-action-btn"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              sendGetLocation(vehicle)
+                            }}
+                            disabled={commandLoading || !vehicle.sim_card_number}
+                          >📍</button>
+                          <button 
+                            className="mobile-action-btn stop"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              sendCommand('cutoil', vehicle, 'STOP')
+                            }}
+                            disabled={commandLoading || !vehicle.sim_card_number}
+                          >🛑</button>
+                          <button 
+                            className="mobile-action-btn start"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              sendCommand('resume', vehicle, 'START')
+                            }}
+                            disabled={commandLoading || !vehicle.sim_card_number}
+                          >▶️</button>
+                          <button 
+                            className="mobile-action-btn"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              sendCommand('status', vehicle, 'STATUS')
+                            }}
+                            disabled={commandLoading || !vehicle.sim_card_number}
+                          >📊</button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {mobileView === 'map' && (
+              <div className="mobile-map">
+                {vehicles.length > 0 ? (
+                  <TrackerMap 
+                    vehicles={vehicles}
+                    selectedVehicle={selectedVehicle}
+                    onMarkerClick={handleMarkerClick}
+                  />
+                ) : (
+                  <div className="no-vehicles-map">
+                    <div className="no-vehicles-content">
+                      <div className="empty-icon">🚛</div>
+                      <h3>No Vehicles</h3>
+                      <p>Add vehicles to start tracking</p>
+                      <button onClick={handleRefresh} className="refresh-btn">Refresh</button>
+                    </div>
+                  </div>
+                )}
+                <div className="mobile-map-controls">
+                  <button 
+                    className="map-control-btn"
+                    onClick={() => setMapLayer(mapLayer === 'satellite' ? 'roadmap' : 'satellite')}
+                  >
+                    {mapLayer === 'satellite' ? '🛰️' : '🗺️'}
+                  </button>
+                  <button 
+                    className="map-control-btn"
+                    onClick={() => switchMobileView('fleet')}
+                  >
+                    📋
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {!isMobile && (
+        <div className="map-controls">
           <button 
-            className="show-sidebar-btn"
-            onClick={() => setShowSidebar(true)}
+            className="control-btn"
+            onClick={() => setMapLayer(mapLayer === 'satellite' ? 'roadmap' : 'satellite')}
           >
-            <span className="btn-icon">▶</span>
-            <span className="btn-text">Show Fleet</span>
+            {mapLayer === 'satellite' ? '🛰️' : '🗺️'}
           </button>
-        )}
-      </div>
-
-      {/* Map Controls */}
-      <div className="map-controls">
-        <button 
-          className="control-btn"
-          onClick={() => setMapLayer(mapLayer === 'satellite' ? 'roadmap' : 'satellite')}
-          title="Toggle Map Type"
-        >
-          {mapLayer === 'satellite' ? '🛰️' : '🗺️'}
-        </button>
-        <button 
-          className="control-btn"
-          onClick={handleRefresh}
-          title="Refresh"
-        >
-          ⟳
-        </button>
-      </div>
+          <button 
+            className="control-btn"
+            onClick={handleRefresh}
+          >
+            ⟳
+          </button>
+        </div>
+      )}
 
       <style jsx>{`
         .live-tracking-container {
@@ -778,104 +826,69 @@ const LiveTracking = () => {
           height: 100vh;
         }
 
-        /* Map Section */
         .map-section {
           flex: 1;
           height: 100vh;
           position: relative;
           background: #030912;
         }
-
         .map-section > div {
           width: 100% !important;
           height: 100% !important;
         }
 
-        /* No Vehicles */
         .no-vehicles-map {
           width: 100%;
           height: 100vh;
           display: flex;
           align-items: center;
           justify-content: center;
-          background: radial-gradient(ellipse at center, #0a1628, #030912);
+          background: #030912;
         }
-
         .no-vehicles-content {
           text-align: center;
           color: white;
-          animation: fadeIn 0.6s ease;
         }
-
-        @keyframes fadeIn {
-          from { opacity: 0; transform: scale(0.95); }
-          to { opacity: 1; transform: scale(1); }
-        }
-
         .no-vehicles-content .empty-icon {
-          font-size: 72px;
+          font-size: 60px;
           display: block;
-          margin-bottom: 20px;
+          margin-bottom: 16px;
           opacity: 0.5;
         }
-
         .no-vehicles-content h3 {
-          font-size: 24px;
+          font-size: 20px;
           font-family: var(--font-head, sans-serif);
-          margin-bottom: 10px;
+          margin-bottom: 8px;
         }
-
         .no-vehicles-content p {
           color: #94a3b8;
-          margin-bottom: 24px;
+          margin-bottom: 16px;
           font-family: var(--font-tech, monospace);
         }
-
         .refresh-btn {
           background: linear-gradient(135deg, #0a6fff, #0055cc);
           color: white;
           border: none;
-          padding: 10px 28px;
-          border-radius: 8px;
+          padding: 8px 20px;
+          border-radius: 6px;
           cursor: pointer;
-          font-size: 14px;
+          font-size: 13px;
           font-weight: 600;
-          transition: all 0.2s;
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
         }
 
-        .refresh-btn:hover {
-          transform: translateY(-2px);
-          box-shadow: 0 8px 24px rgba(10, 111, 255, 0.3);
-        }
-
-        .refresh-btn .btn-icon {
-          font-size: 18px;
-        }
-
-        /* Sidebar */
+        /* ====== SIDEBAR MODERN ====== */
         .sidebar {
           height: 100vh;
-          background: linear-gradient(180deg, rgba(6, 14, 30, 0.98), rgba(2, 6, 16, 0.99));
-          border-left: 1px solid rgba(10, 111, 255, 0.1);
+          background: linear-gradient(180deg, #0a1628, #060e1e);
+          border-left: 1px solid rgba(10, 111, 255, 0.08);
           display: flex;
           flex-direction: column;
           position: relative;
-          transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+          min-width: 380px;
+          max-width: 600px;
           overflow: hidden;
-          min-width: 320px;
-          max-width: 650px;
         }
 
-        .sidebar.closed {
-          width: 0 !important;
-          min-width: 0;
-          border: none;
-        }
-
-        /* Resize Handle */
         .resize-handle {
           position: absolute;
           left: -4px;
@@ -888,13 +901,10 @@ const LiveTracking = () => {
           align-items: center;
           justify-content: center;
         }
-
-        .resize-handle:hover .resize-line,
-        .resize-handle:active .resize-line {
+        .resize-handle:hover .resize-line {
           background: rgba(10, 111, 255, 0.5);
           height: 80px;
         }
-
         .resize-line {
           width: 2px;
           height: 40px;
@@ -903,735 +913,444 @@ const LiveTracking = () => {
           transition: all 0.3s;
         }
 
-        /* Sidebar Header */
         .sidebar-header {
-          padding: 20px 24px;
-          border-bottom: 1px solid rgba(10, 111, 255, 0.08);
+          padding: 18px 24px 14px;
+          border-bottom: 1px solid rgba(10, 111, 255, 0.06);
           display: flex;
           justify-content: space-between;
-          align-items: flex-start;
+          align-items: center;
           flex-shrink: 0;
         }
-
         .sidebar-title {
           display: flex;
           gap: 12px;
+          align-items: center;
         }
-
         .sidebar-title .title-icon {
-          font-size: 28px;
+          font-size: 24px;
         }
-
         .sidebar-title h2 {
-          font-size: 18px;
+          font-size: 16px;
           font-weight: 700;
           color: white;
           margin: 0;
           font-family: var(--font-head, sans-serif);
-          background: linear-gradient(135deg, #fff, #94a3b8);
-          -webkit-background-clip: text;
-          -webkit-text-fill-color: transparent;
         }
-
         .title-sub {
-          font-size: 11px;
+          font-size: 10px;
           color: #4a5a7a;
           font-family: var(--font-tech, monospace);
           display: block;
-          margin-top: 2px;
         }
-
-        .header-actions {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-        }
-
         .close-sidebar {
-          background: rgba(10, 111, 255, 0.08);
+          background: rgba(10, 111, 255, 0.06);
           border: none;
-          color: #94a3b8;
-          width: 30px;
-          height: 30px;
-          border-radius: 8px;
+          color: #4a5a7a;
+          width: 28px;
+          height: 28px;
+          border-radius: 6px;
           cursor: pointer;
           font-size: 14px;
-          transition: all 0.2s;
-          display: flex;
-          align-items: center;
-          justify-content: center;
         }
-
         .close-sidebar:hover {
           background: rgba(239, 68, 68, 0.15);
           color: #ef4444;
         }
 
-        /* Stats Dashboard */
-        .stats-dashboard {
-          padding: 16px 20px;
-          border-bottom: 1px solid rgba(10, 111, 255, 0.05);
-          flex-shrink: 0;
-        }
-
-        .stats-grid {
+        /* Stats Grid Modern */
+        .stats-grid-modern {
           display: grid;
           grid-template-columns: repeat(4, 1fr);
           gap: 8px;
+          padding: 14px 20px 10px;
+          border-bottom: 1px solid rgba(10, 111, 255, 0.06);
+          flex-shrink: 0;
         }
-
-        .stat-card {
-          display: flex;
-          align-items: center;
-          gap: 10px;
+        .stat-card-modern {
+          text-align: center;
           background: rgba(8, 20, 50, 0.3);
-          border-radius: 10px;
-          padding: 12px 14px;
-          border: 1px solid rgba(10, 111, 255, 0.05);
-          transition: all 0.2s;
+          border-radius: 8px;
+          padding: 10px 8px;
+          border: 1px solid rgba(10, 111, 255, 0.04);
         }
-
-        .stat-card:hover {
-          background: rgba(10, 111, 255, 0.05);
-          transform: translateY(-1px);
-        }
-
-        .stat-card .stat-icon {
-          font-size: 20px;
-        }
-
-        .stat-card .stat-info {
-          display: flex;
-          flex-direction: column;
-        }
-
-        .stat-card .stat-value {
-          font-size: 20px;
+        .stat-number {
+          display: block;
+          font-size: 22px;
           font-weight: 700;
           font-family: var(--font-display, sans-serif);
           color: white;
         }
-
-        .stat-card .stat-label {
+        .stat-label-modern {
           font-size: 9px;
           color: #4a5a7a;
           font-family: var(--font-tech, monospace);
           text-transform: uppercase;
-          letter-spacing: 0.5px;
+          letter-spacing: 0.3px;
+          margin-top: 2px;
         }
 
-        .stat-card.total .stat-value { color: #0a6fff; }
-        .stat-card.online .stat-value { color: #22c55e; }
-        .stat-card.moving .stat-value { color: #22c55e; }
-        .stat-card.parked .stat-value { color: #f59e0b; }
-
-        /* Tracker Status Bar */
-        .tracker-status-bar {
+        /* Tracker Status Modern */
+        .tracker-status-modern {
           display: flex;
-          gap: 16px;
-          padding: 10px 20px;
-          border-bottom: 1px solid rgba(10, 111, 255, 0.05);
+          gap: 12px;
+          padding: 8px 20px 12px;
+          border-bottom: 1px solid rgba(10, 111, 255, 0.06);
           flex-shrink: 0;
-          background: rgba(8, 20, 50, 0.2);
+          flex-wrap: wrap;
         }
-
-        .status-item {
+        .status-chip {
           display: flex;
           align-items: center;
-          gap: 8px;
+          gap: 6px;
           font-family: var(--font-tech, monospace);
           font-size: 11px;
+          color: #94a3b8;
+          background: rgba(8, 20, 50, 0.3);
+          padding: 4px 12px;
+          border-radius: 20px;
+          border: 1px solid rgba(10, 111, 255, 0.04);
         }
-
-        .status-dot {
-          width: 8px;
-          height: 8px;
+        .chip-dot {
+          width: 6px;
+          height: 6px;
           border-radius: 50%;
           display: inline-block;
         }
-
-        .status-dot.active { background: #22c55e; box-shadow: 0 0 8px rgba(34, 197, 94, 0.3); }
-        .status-dot.expiring { background: #f59e0b; box-shadow: 0 0 8px rgba(245, 158, 11, 0.3); }
-        .status-dot.expired { background: #ef4444; box-shadow: 0 0 8px rgba(239, 68, 68, 0.3); }
-
-        .status-label {
-          color: #94a3b8;
-        }
-
-        .status-count {
+        .chip-dot.active { background: #22c55e; }
+        .chip-dot.expiring { background: #f59e0b; }
+        .chip-dot.expired { background: #ef4444; }
+        .chip-count {
           color: white;
           font-weight: 600;
-          background: rgba(255, 255, 255, 0.05);
-          padding: 0 8px;
-          border-radius: 10px;
+          margin-left: 2px;
         }
 
-        /* Search */
-        .sidebar-search {
-          padding: 12px 20px;
-          border-bottom: 1px solid rgba(10, 111, 255, 0.05);
+        /* Search Modern */
+        .search-modern {
+          position: relative;
+          padding: 10px 20px;
+          border-bottom: 1px solid rgba(10, 111, 255, 0.06);
           flex-shrink: 0;
         }
-
-        .search-wrapper {
-          position: relative;
-        }
-
-        .search-icon {
+        .search-modern .search-icon {
           position: absolute;
-          left: 12px;
+          left: 32px;
           top: 50%;
           transform: translateY(-50%);
-          font-size: 14px;
-          opacity: 0.5;
-        }
-
-        .search-wrapper input {
-          width: 100%;
-          background: rgba(8, 20, 50, 0.6);
-          border: 1px solid rgba(10, 111, 255, 0.1);
-          border-radius: 10px;
-          padding: 10px 12px 10px 36px;
-          color: white;
           font-size: 13px;
+          opacity: 0.4;
+        }
+        .search-modern input {
+          width: 100%;
+          background: rgba(8, 20, 50, 0.4);
+          border: 1px solid rgba(10, 111, 255, 0.06);
+          border-radius: 8px;
+          padding: 8px 12px 8px 36px;
+          color: white;
+          font-size: 12px;
           outline: none;
           font-family: var(--font-tech, monospace);
-          transition: all 0.2s;
         }
-
-        .search-wrapper input:focus {
-          border-color: #0a6fff;
-          box-shadow: 0 0 0 3px rgba(10, 111, 255, 0.1);
+        .search-modern input:focus {
+          border-color: rgba(10, 111, 255, 0.2);
         }
-
-        .search-wrapper input::placeholder {
+        .search-modern input::placeholder {
           color: #4a5a7a;
         }
-
-        .search-clear {
+        .search-modern .search-clear {
           position: absolute;
-          right: 12px;
+          right: 32px;
           top: 50%;
           transform: translateY(-50%);
           background: none;
           border: none;
           color: #4a5a7a;
           cursor: pointer;
-          font-size: 12px;
-          transition: color 0.2s;
         }
 
-        .search-clear:hover {
-          color: white;
-        }
-
-        /* Filters */
-        .sidebar-filters {
+        /* Filters Modern */
+        .filters-modern {
           display: flex;
           gap: 6px;
-          padding: 10px 20px;
-          border-bottom: 1px solid rgba(10, 111, 255, 0.05);
-          flex-wrap: wrap;
+          padding: 8px 20px 12px;
+          border-bottom: 1px solid rgba(10, 111, 255, 0.06);
           flex-shrink: 0;
+          flex-wrap: wrap;
         }
-
-        .filter-btn {
-          background: rgba(8, 20, 50, 0.4);
-          border: 1px solid rgba(10, 111, 255, 0.08);
-          border-radius: 20px;
-          padding: 6px 14px;
+        .filter-modern {
+          background: rgba(8, 20, 50, 0.3);
+          border: 1px solid rgba(10, 111, 255, 0.04);
+          border-radius: 16px;
+          padding: 4px 12px;
           color: #94a3b8;
-          font-size: 11px;
+          font-size: 10px;
           cursor: pointer;
           transition: all 0.2s;
           font-family: var(--font-tech, monospace);
           display: flex;
           align-items: center;
-          gap: 6px;
+          gap: 4px;
         }
-
-        .filter-btn:hover {
-          background: rgba(10, 111, 255, 0.08);
+        .filter-modern:hover {
+          background: rgba(10, 111, 255, 0.06);
         }
-
-        .filter-btn.active {
-          background: rgba(10, 111, 255, 0.15);
-          border-color: #0a6fff;
+        .filter-modern.active {
+          background: rgba(10, 111, 255, 0.12);
+          border-color: rgba(10, 111, 255, 0.2);
           color: #0a6fff;
         }
-
-        .filter-btn.moving.active {
-          background: rgba(34, 197, 94, 0.15);
-          border-color: #22c55e;
+        .filter-modern.moving.active {
+          background: rgba(34, 197, 94, 0.12);
+          border-color: rgba(34, 197, 94, 0.2);
           color: #22c55e;
         }
-
-        .filter-btn.parked.active {
-          background: rgba(245, 158, 11, 0.15);
-          border-color: #f59e0b;
+        .filter-modern.parked.active {
+          background: rgba(245, 158, 11, 0.12);
+          border-color: rgba(245, 158, 11, 0.2);
           color: #f59e0b;
         }
-
-        .filter-btn.alert.active {
-          background: rgba(239, 68, 68, 0.15);
-          border-color: #ef4444;
+        .filter-modern.alert.active {
+          background: rgba(239, 68, 68, 0.12);
+          border-color: rgba(239, 68, 68, 0.2);
           color: #ef4444;
         }
-
         .filter-count {
           background: rgba(255, 255, 255, 0.05);
           padding: 0 6px;
           border-radius: 10px;
-          font-size: 10px;
+          font-size: 9px;
+          margin-left: 2px;
         }
-
         .dot {
-          width: 6px;
-          height: 6px;
+          width: 5px;
+          height: 5px;
           border-radius: 50%;
           display: inline-block;
         }
-
         .dot.green { background: #22c55e; }
         .dot.yellow { background: #f59e0b; }
         .dot.red { background: #ef4444; }
 
-        /* Vehicle List */
-        .vehicle-list {
+        /* Vehicle List Modern */
+        .vehicle-list-modern {
           flex: 1;
           overflow-y: auto;
-          padding: 12px 16px;
+          padding: 10px 16px;
         }
-
-        .vehicle-list::-webkit-scrollbar {
+        .vehicle-list-modern::-webkit-scrollbar {
           width: 3px;
         }
-
-        .vehicle-list::-webkit-scrollbar-track {
-          background: rgba(10, 111, 255, 0.05);
-        }
-
-        .vehicle-list::-webkit-scrollbar-thumb {
+        .vehicle-list-modern::-webkit-scrollbar-thumb {
           background: rgba(10, 111, 255, 0.3);
           border-radius: 4px;
         }
 
-        .vehicle-item {
-          background: rgba(8, 20, 50, 0.3);
-          border: 1px solid rgba(10, 111, 255, 0.06);
-          border-radius: 12px;
+        .vehicle-card-modern {
+          background: rgba(8, 20, 50, 0.25);
+          border: 1px solid rgba(10, 111, 255, 0.04);
+          border-radius: 10px;
           padding: 14px 16px;
-          margin-bottom: 10px;
+          margin-bottom: 8px;
           cursor: pointer;
-          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-          position: relative;
+          transition: all 0.2s;
         }
-
-        .vehicle-item:hover {
+        .vehicle-card-modern:hover {
+          background: rgba(10, 111, 255, 0.04);
+        }
+        .vehicle-card-modern.selected {
+          border-color: #0a6fff;
           background: rgba(10, 111, 255, 0.06);
-          transform: translateX(4px);
+        }
+        .vehicle-card-modern.online {
+          border-color: rgba(34, 197, 94, 0.08);
+        }
+        .vehicle-card-modern.offline {
+          border-color: rgba(74, 90, 122, 0.08);
         }
 
-        .vehicle-item.hovered {
-          background: rgba(10, 111, 255, 0.08);
+        .vehicle-card-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 4px;
         }
-
-        .vehicle-item.selected {
-          background: rgba(10, 111, 255, 0.1);
-        }
-
-        .vehicle-item.has-location {
-          border-color: rgba(34, 197, 94, 0.12);
-        }
-
-        .vehicle-item::before {
-          content: '';
-          position: absolute;
-          left: 0;
-          top: 10%;
-          bottom: 10%;
-          width: 3px;
-          background: transparent;
-          border-radius: 0 3px 3px 0;
-          transition: background 0.3s;
-        }
-
-        .vehicle-item.selected::before {
-          background: #0a6fff;
-        }
-
-        .vehicle-item.has-location::before {
-          background: rgba(34, 197, 94, 0.3);
-        }
-
-        .vehicle-info {
-          margin-bottom: 10px;
-        }
-
-        .vehicle-status {
+        .vehicle-name-id {
           display: flex;
           align-items: center;
           gap: 8px;
-          margin-bottom: 6px;
         }
-
-        .status-dot {
+        .status-dot-modern {
           width: 8px;
           height: 8px;
           border-radius: 50%;
           display: inline-block;
-          animation: pulse 2s infinite;
         }
-
-        @keyframes pulse {
-          0%, 100% { opacity: 1; transform: scale(1); }
-          50% { opacity: 0.5; transform: scale(0.8); }
-        }
-
-        .vehicle-id {
+        .vehicle-id-modern {
           font-size: 14px;
           font-weight: 600;
           color: white;
           font-family: var(--font-head, sans-serif);
         }
-
-        .live-badge {
+        .status-badge-modern {
           font-size: 8px;
+          font-weight: 600;
+          padding: 1px 8px;
+          border-radius: 10px;
+          font-family: var(--font-tech, monospace);
+        }
+        .vehicle-card-modern.online .status-badge-modern {
           color: #22c55e;
-          background: rgba(34, 197, 94, 0.15);
-          padding: 2px 10px;
-          border-radius: 10px;
-          animation: pulse 1.5s infinite;
-          border: 1px solid rgba(34, 197, 94, 0.2);
-          font-weight: 600;
+          background: rgba(34, 197, 94, 0.12);
         }
-
-        .offline-badge {
-          font-size: 8px;
+        .vehicle-card-modern.offline .status-badge-modern {
           color: #4a5a7a;
-          background: rgba(74, 90, 122, 0.15);
-          padding: 2px 10px;
-          border-radius: 10px;
+          background: rgba(74, 90, 122, 0.12);
+        }
+        .vehicle-speed-modern {
+          font-size: 13px;
           font-weight: 600;
+          font-family: var(--font-tech, monospace);
         }
 
-        .speed-warning {
-          font-size: 14px;
-          animation: pulse 0.8s infinite;
-        }
-
-        .vehicle-details {
+        .vehicle-card-body {
           display: flex;
           gap: 14px;
           font-size: 11px;
           color: #94a3b8;
           font-family: var(--font-tech, monospace);
-          flex-wrap: wrap;
+          margin-bottom: 4px;
         }
+        .vehicle-name { color: #94a3b8; }
+        .vehicle-driver { color: #4a5a7a; }
 
-        .vehicle-status-text {
+        .vehicle-status-text-modern {
           display: flex;
           align-items: center;
           gap: 6px;
-          margin-top: 4px;
           font-size: 11px;
           color: #4a5a7a;
           font-family: var(--font-tech, monospace);
+          margin-bottom: 4px;
         }
 
-        .status-icon {
-          font-size: 12px;
-        }
-
-        .status-desc {
-          color: #94a3b8;
-        }
-
-        .vehicle-coords {
+        .vehicle-coords-modern {
           font-size: 10px;
           color: #0a6fff;
-          margin-top: 4px;
           font-family: monospace;
           opacity: 0.7;
+          margin-bottom: 4px;
         }
 
-        .vehicle-meta {
+        .vehicle-meta-modern {
           display: flex;
           gap: 12px;
-          margin-top: 6px;
-          padding-top: 6px;
-          border-top: 1px solid rgba(10, 111, 255, 0.05);
           font-size: 10px;
-          color: #4a5a7a;
+          color: #2a3a5a;
           font-family: var(--font-tech, monospace);
+          padding: 6px 0;
+          border-top: 1px solid rgba(10, 111, 255, 0.04);
+          margin-bottom: 8px;
           flex-wrap: wrap;
         }
 
-        .meta-item {
-          display: flex;
-          align-items: center;
-          gap: 4px;
-        }
-
-        .vehicle-actions {
+        .vehicle-actions-modern {
           display: flex;
           gap: 6px;
-          margin-top: 10px;
         }
-
-        .action-btn {
+        .action-modern {
           flex: 1;
-          background: rgba(10, 111, 255, 0.06);
-          border: 1px solid rgba(10, 111, 255, 0.06);
+          background: rgba(8, 20, 50, 0.3);
+          border: 1px solid rgba(10, 111, 255, 0.04);
           color: #94a3b8;
           padding: 6px 8px;
-          border-radius: 8px;
-          font-size: 11px;
+          border-radius: 6px;
+          font-size: 10px;
           font-family: var(--font-tech, monospace);
           cursor: pointer;
           transition: all 0.2s;
-          font-weight: 500;
           text-align: center;
+          font-weight: 500;
         }
-
-        .action-btn:hover:not(:disabled) {
-          background: rgba(10, 111, 255, 0.15);
+        .action-modern:hover:not(:disabled) {
+          background: rgba(10, 111, 255, 0.08);
           color: white;
-          transform: translateY(-1px);
         }
-
-        .action-btn.location:hover:not(:disabled) {
-          background: rgba(10, 111, 255, 0.2);
+        .action-modern.location:hover:not(:disabled) {
           color: #0a6fff;
-          border-color: rgba(10, 111, 255, 0.3);
+          background: rgba(10, 111, 255, 0.1);
         }
-
-        .action-btn.stop:hover:not(:disabled) {
-          background: rgba(239, 68, 68, 0.15);
+        .action-modern.stop:hover:not(:disabled) {
           color: #ef4444;
-          border-color: rgba(239, 68, 68, 0.2);
+          background: rgba(239, 68, 68, 0.1);
         }
-
-        .action-btn.start:hover:not(:disabled) {
-          background: rgba(34, 197, 94, 0.15);
+        .action-modern.start:hover:not(:disabled) {
           color: #22c55e;
-          border-color: rgba(34, 197, 94, 0.2);
+          background: rgba(34, 197, 94, 0.1);
         }
-
-        .action-btn.status:hover:not(:disabled) {
-          background: rgba(245, 158, 11, 0.15);
+        .action-modern.status:hover:not(:disabled) {
           color: #f59e0b;
-          border-color: rgba(245, 158, 11, 0.2);
+          background: rgba(245, 158, 11, 0.1);
         }
-
-        .action-btn:disabled {
+        .action-modern:disabled {
           opacity: 0.3;
           cursor: not-allowed;
         }
 
         .empty-state {
           text-align: center;
-          padding: 60px 20px;
+          padding: 40px 20px;
           color: #4a5a7a;
         }
 
-        .empty-state .empty-icon {
-          font-size: 40px;
-          display: block;
-          margin-bottom: 16px;
-          opacity: 0.5;
-        }
-
-        .empty-state p {
-          font-size: 14px;
-          font-weight: 600;
-          color: #94a3b8;
-          margin-bottom: 4px;
-        }
-
-        .empty-state .empty-hint {
-          font-size: 12px;
-          color: #4a5a7a;
-        }
-
-        /* Sidebar Footer */
-        .sidebar-footer {
-          padding: 12px 20px;
-          border-top: 1px solid rgba(10, 111, 255, 0.05);
+        .sidebar-footer-modern {
+          padding: 10px 20px;
+          border-top: 1px solid rgba(10, 111, 255, 0.04);
           display: flex;
           justify-content: space-between;
-          align-items: center;
           font-family: var(--font-tech, monospace);
           font-size: 10px;
-          color: #2a3a5a;
+          color: #1a2a4a;
           flex-shrink: 0;
         }
-
-        .footer-left {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-        }
-
-        .footer-divider {
-          color: #1a2a4a;
-        }
-
-        .footer-version {
-          background: rgba(10, 111, 255, 0.1);
-          padding: 2px 8px;
-          border-radius: 4px;
+        .footer-version-modern {
           color: #0a6fff;
         }
 
-        .footer-right {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-        }
-
-        .refresh-btn-small {
-          background: none;
-          border: none;
-          color: #4a5a7a;
-          cursor: pointer;
-          font-size: 16px;
-          transition: all 0.3s;
-          padding: 4px;
-        }
-
-        .refresh-btn-small:hover {
-          color: white;
-          transform: rotate(45deg);
-        }
-
-        .refresh-btn-small.spinning {
-          animation: spin 1s linear infinite;
-        }
-
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
-
-        .footer-status {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          color: #4a5a7a;
-        }
-
-        .status-dot-small {
-          width: 6px;
-          height: 6px;
-          border-radius: 50%;
-          display: inline-block;
-        }
-
-        .status-dot-small.online {
-          background: #22c55e;
-        }
-
-        /* Show Sidebar Button */
-        .show-sidebar-btn {
-          position: fixed;
-          right: 20px;
-          top: 50%;
-          transform: translateY(-50%);
-          background: rgba(6, 14, 30, 0.9);
-          backdrop-filter: blur(10px);
-          border: 1px solid rgba(10, 111, 255, 0.3);
-          color: white;
-          padding: 14px 12px;
-          border-radius: 10px;
-          cursor: pointer;
-          transition: all 0.3s;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          gap: 8px;
-          z-index: 50;
-        }
-
-        .show-sidebar-btn:hover {
-          background: rgba(10, 111, 255, 0.2);
-          transform: translateY(-50%) scale(1.05);
-        }
-
-        .show-sidebar-btn .btn-icon {
-          font-size: 22px;
-        }
-
-        .show-sidebar-btn .btn-text {
-          font-size: 9px;
-          color: #94a3b8;
-          font-family: var(--font-tech, monospace);
-          writing-mode: vertical-rl;
-          letter-spacing: 2px;
-        }
-
-        /* Command Toast */
         .command-toast {
           position: fixed;
           top: 20px;
           left: 50%;
           transform: translateX(-50%);
-          padding: 12px 20px;
-          border-radius: 12px;
+          padding: 10px 18px;
+          border-radius: 10px;
           color: white;
           z-index: 9999;
-          animation: slideDown 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+          animation: slideDown 0.3s ease;
           display: flex;
           align-items: center;
-          gap: 12px;
-          font-size: 14px;
+          gap: 10px;
+          font-size: 13px;
           font-weight: 500;
-          max-width: 500px;
+          max-width: 400px;
           box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-          backdrop-filter: blur(20px);
-          border: 1px solid rgba(255, 255, 255, 0.1);
         }
-
-        .command-toast.loading {
-          background: linear-gradient(135deg, rgba(10, 111, 255, 0.9), rgba(0, 195, 255, 0.9));
-        }
-        .command-toast.success {
-          background: linear-gradient(135deg, rgba(5, 150, 105, 0.95), rgba(16, 185, 129, 0.95));
-        }
-        .command-toast.error {
-          background: linear-gradient(135deg, rgba(220, 38, 38, 0.95), rgba(239, 68, 68, 0.95));
-        }
-
-        .toast-icon {
-          font-size: 18px;
-        }
-
+        .command-toast.loading { background: linear-gradient(135deg, rgba(10, 111, 255, 0.9), rgba(0, 195, 255, 0.9)); }
+        .command-toast.success { background: linear-gradient(135deg, rgba(5, 150, 105, 0.95), rgba(16, 185, 129, 0.95)); }
+        .command-toast.error { background: linear-gradient(135deg, rgba(220, 38, 38, 0.95), rgba(239, 68, 68, 0.95)); }
         .toast-close {
           background: none;
           border: none;
           color: rgba(255, 255, 255, 0.6);
           cursor: pointer;
-          font-size: 16px;
-          padding: 0 4px;
-          transition: color 0.2s;
+          font-size: 14px;
           margin-left: auto;
         }
 
-        .toast-close:hover {
-          color: white;
-        }
-
         @keyframes slideDown {
-          from {
-            transform: translateX(-50%) translateY(-100px);
-            opacity: 0;
-          }
-          to {
-            transform: translateX(-50%) translateY(0);
-            opacity: 1;
-          }
+          from { transform: translateX(-50%) translateY(-100px); opacity: 0; }
+          to { transform: translateX(-50%) translateY(0); opacity: 1; }
         }
 
-        /* Map Controls */
         .map-controls {
           position: fixed;
           right: 20px;
@@ -1641,7 +1360,6 @@ const LiveTracking = () => {
           flex-direction: column;
           gap: 8px;
         }
-
         .control-btn {
           background: rgba(6, 14, 30, 0.85);
           backdrop-filter: blur(10px);
@@ -1652,154 +1370,302 @@ const LiveTracking = () => {
           border-radius: 10px;
           cursor: pointer;
           font-size: 18px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
           transition: all 0.2s;
+        }
+        .control-btn:hover {
+          background: rgba(10, 111, 255, 0.2);
+        }
+
+        /* ====== MOBILE STYLES ====== */
+        .mobile-layout {
+          display: flex;
+          flex-direction: column;
+          height: 100vh;
+          width: 100%;
+          background: #030912;
+        }
+
+        .mobile-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 12px 16px;
+          background: rgba(6, 14, 30, 0.95);
+          border-bottom: 1px solid rgba(10, 111, 255, 0.1);
+          flex-shrink: 0;
+          z-index: 10;
+        }
+        .mobile-title {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          font-family: var(--font-head, sans-serif);
+          font-size: 16px;
+          font-weight: 700;
+          color: white;
+        }
+        .mobile-title .title-icon { font-size: 20px; }
+        .mobile-refresh {
+          background: rgba(10, 111, 255, 0.1);
+          border: 1px solid rgba(10, 111, 255, 0.2);
+          color: white;
+          width: 32px;
+          height: 32px;
+          border-radius: 8px;
+          cursor: pointer;
+          font-size: 16px;
           display: flex;
           align-items: center;
           justify-content: center;
         }
 
-        .control-btn:hover {
-          background: rgba(10, 111, 255, 0.2);
-          transform: scale(1.05);
+        .mobile-tabs {
+          display: flex;
+          background: rgba(6, 14, 30, 0.95);
+          border-bottom: 1px solid rgba(10, 111, 255, 0.1);
+          flex-shrink: 0;
+          z-index: 10;
+        }
+        .mobile-tab {
+          flex: 1;
+          padding: 10px;
+          background: none;
+          border: none;
+          color: #4a5a7a;
+          font-family: var(--font-tech, monospace);
+          font-size: 12px;
+          cursor: pointer;
+          transition: all 0.2s;
+          border-bottom: 2px solid transparent;
+        }
+        .mobile-tab.active {
+          color: #0a6fff;
+          border-bottom-color: #0a6fff;
         }
 
-        /* Responsive */
-        @media (max-width: 1024px) {
-          .sidebar {
-            min-width: 340px;
-            max-width: 420px;
-          }
-          .stats-grid {
-            grid-template-columns: repeat(2, 1fr);
-          }
+        .mobile-content {
+          flex: 1;
+          overflow: hidden;
+          position: relative;
+        }
+
+        .mobile-fleet {
+          height: 100%;
+          overflow-y: auto;
+          padding: 12px 16px;
+          background: #030912;
+        }
+        .mobile-stats {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 8px;
+          margin-bottom: 12px;
+        }
+        .mobile-stat {
+          text-align: center;
+          background: rgba(8, 20, 50, 0.4);
+          border-radius: 8px;
+          padding: 10px;
+          border: 1px solid rgba(10, 111, 255, 0.05);
+        }
+        .mobile-stat-value {
+          display: block;
+          font-size: 20px;
+          font-weight: 700;
+          font-family: var(--font-display, sans-serif);
+          color: white;
+        }
+        .mobile-stat-label {
+          font-size: 9px;
+          color: #4a5a7a;
+          font-family: var(--font-tech, monospace);
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          margin-top: 2px;
+        }
+
+        .mobile-search {
+          position: relative;
+          margin-bottom: 10px;
+        }
+        .mobile-search input {
+          width: 100%;
+          background: rgba(8, 20, 50, 0.6);
+          border: 1px solid rgba(10, 111, 255, 0.1);
+          border-radius: 8px;
+          padding: 10px 12px;
+          color: white;
+          font-size: 13px;
+          outline: none;
+          font-family: var(--font-tech, monospace);
+        }
+        .mobile-search input:focus { border-color: #0a6fff; }
+        .mobile-search input::placeholder { color: #4a5a7a; }
+        .mobile-search-clear {
+          position: absolute;
+          right: 12px;
+          top: 50%;
+          transform: translateY(-50%);
+          background: none;
+          border: none;
+          color: #4a5a7a;
+          cursor: pointer;
+          font-size: 14px;
+        }
+
+        .mobile-filters {
+          display: flex;
+          gap: 6px;
+          margin-bottom: 12px;
+          flex-wrap: wrap;
+        }
+        .mobile-filter {
+          background: rgba(8, 20, 50, 0.4);
+          border: 1px solid rgba(10, 111, 255, 0.08);
+          border-radius: 16px;
+          padding: 5px 14px;
+          color: #94a3b8;
+          font-size: 11px;
+          cursor: pointer;
+          transition: all 0.2s;
+          font-family: var(--font-tech, monospace);
+        }
+        .mobile-filter.active {
+          background: rgba(10, 111, 255, 0.15);
+          border-color: #0a6fff;
+          color: #0a6fff;
+        }
+
+        .mobile-vehicle-list {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+        .mobile-vehicle-item {
+          background: rgba(8, 20, 50, 0.3);
+          border: 1px solid rgba(10, 111, 255, 0.06);
+          border-radius: 10px;
+          padding: 12px 14px;
+          cursor: pointer;
+        }
+        .mobile-vehicle-item:active { transform: scale(0.98); }
+        .mobile-vehicle-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 4px;
+        }
+        .mobile-vehicle-id {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 13px;
+          font-weight: 600;
+          color: white;
+          font-family: var(--font-head, sans-serif);
+        }
+        .mobile-vehicle-speed {
+          font-size: 12px;
+          font-weight: 600;
+          font-family: var(--font-tech, monospace);
+          color: #22c55e;
+        }
+        .mobile-vehicle-details {
+          display: flex;
+          gap: 12px;
+          font-size: 11px;
+          color: #94a3b8;
+          font-family: var(--font-tech, monospace);
+          margin-bottom: 8px;
+        }
+        .mobile-vehicle-actions {
+          display: flex;
+          gap: 6px;
+        }
+        .mobile-action-btn {
+          flex: 1;
+          background: rgba(10, 111, 255, 0.08);
+          border: 1px solid rgba(10, 111, 255, 0.06);
+          color: #94a3b8;
+          padding: 6px;
+          border-radius: 6px;
+          font-size: 14px;
+          cursor: pointer;
+          text-align: center;
+        }
+        .mobile-action-btn:active:not(:disabled) { transform: scale(0.95); }
+        .mobile-action-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+        .mobile-vehicle-item .live-badge {
+          font-size: 7px;
+          color: #22c55e;
+          background: rgba(34, 197, 94, 0.15);
+          padding: 1px 6px;
+          border-radius: 8px;
+          border: 1px solid rgba(34, 197, 94, 0.2);
+          margin-left: 4px;
+        }
+        .mobile-vehicle-item .status-dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          display: inline-block;
+        }
+
+        .mobile-map {
+          width: 100%;
+          height: 100%;
+          position: relative;
+        }
+        .mobile-map > div {
+          width: 100% !important;
+          height: 100% !important;
+        }
+        .mobile-map-controls {
+          position: absolute;
+          bottom: 20px;
+          right: 16px;
+          z-index: 500;
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+        .map-control-btn {
+          background: rgba(6, 14, 30, 0.85);
+          backdrop-filter: blur(10px);
+          border: 1px solid rgba(10, 111, 255, 0.2);
+          color: white;
+          width: 40px;
+          height: 40px;
+          border-radius: 10px;
+          cursor: pointer;
+          font-size: 18px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
         }
 
         @media (max-width: 768px) {
-          .sidebar {
-            position: fixed;
-            right: 0;
-            top: 0;
-            height: 100vh;
-            width: 85% !important;
-            max-width: 380px !important;
-            min-width: 0 !important;
-            z-index: 100;
-            box-shadow: -8px 0 32px rgba(0, 0, 0, 0.5);
-            transform: translateX(0);
-          }
-
-          .sidebar.closed {
-            transform: translateX(100%);
-            width: 85% !important;
-          }
-
-          .resize-handle {
-            display: none;
-          }
-
-          .stats-grid {
-            grid-template-columns: repeat(2, 1fr);
-          }
-
-          .command-toast {
-            top: 10px;
-            left: 16px;
-            right: 16px;
-            transform: none;
-            max-width: none;
-            font-size: 12px;
-            padding: 10px 14px;
-          }
-
-          .map-controls {
-            right: 16px;
-            bottom: 20px;
-          }
-
-          .control-btn {
-            width: 36px;
-            height: 36px;
-            font-size: 16px;
-          }
-
-          .show-sidebar-btn {
-            right: 16px;
-          }
+          .sidebar { display: none; }
+        }
+        @media (min-width: 769px) {
+          .mobile-layout { display: none; }
         }
 
         @media (max-width: 480px) {
-          .sidebar {
-            width: 90% !important;
-            max-width: 340px !important;
-          }
-
-          .sidebar-header {
-            padding: 16px 16px;
-          }
-          .sidebar-title h2 {
-            font-size: 15px;
-          }
-          .title-sub {
-            font-size: 10px;
-          }
-          .stats-grid {
-            grid-template-columns: 1fr 1fr;
-            gap: 6px;
-          }
-          .stat-card {
-            padding: 10px 12px;
-          }
-          .stat-card .stat-value {
-            font-size: 16px;
-          }
-          .stat-card .stat-label {
-            font-size: 8px;
-          }
-          .tracker-status-bar {
-            padding: 8px 16px;
-            gap: 10px;
-          }
-          .status-item {
-            font-size: 10px;
-          }
-          .sidebar-search {
-            padding: 10px 16px;
-          }
-          .sidebar-filters {
-            padding: 8px 16px;
-          }
-          .filter-btn {
-            font-size: 10px;
-            padding: 4px 10px;
-          }
-          .vehicle-list {
-            padding: 8px 10px;
-          }
-          .vehicle-item {
-            padding: 10px 12px;
-          }
-          .vehicle-id {
+          .mobile-stats { grid-template-columns: repeat(2, 1fr); }
+          .mobile-vehicle-actions { flex-wrap: wrap; }
+          .mobile-action-btn { min-width: 44px; }
+          .command-toast {
+            top: 60px;
+            left: 12px;
+            right: 12px;
+            transform: none;
+            max-width: none;
             font-size: 12px;
-          }
-          .vehicle-details {
-            font-size: 10px;
-            gap: 8px;
-          }
-          .vehicle-actions {
-            flex-wrap: wrap;
-          }
-          .action-btn {
-            font-size: 10px;
-            padding: 5px 6px;
-            min-width: 0;
-          }
-          .sidebar-footer {
-            padding: 10px 16px;
-            font-size: 9px;
-          }
-          .vehicle-meta {
-            font-size: 9px;
-            gap: 8px;
+            padding: 8px 12px;
           }
         }
       `}</style>
