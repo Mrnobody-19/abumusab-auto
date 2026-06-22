@@ -1,3 +1,5 @@
+// src/components/Map/TrackerMap.jsx
+
 import React, { useEffect, useRef } from 'react'
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet'
 import L from 'leaflet'
@@ -11,7 +13,7 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 })
 
-// Custom marker icons for different vehicle types
+// Custom marker icons
 const movingIcon = new L.Icon({
   iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
@@ -48,36 +50,6 @@ const idleIcon = new L.Icon({
   shadowSize: [41, 41]
 })
 
-// Custom vehicle marker with pulsing effect
-const createCustomIcon = (status, isSelected = false) => {
-  let color
-  switch(status) {
-    case 'moving': color = '#22c55e'; break
-    case 'parked': color = '#3b82f6'; break
-    case 'alert': color = '#ef4444'; break
-    case 'idle': color = '#94a3b8'; break
-    default: color = '#6b7280'
-  }
-  
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="12" cy="12" r="10"/>
-      <polygon points="12 2 15 9 22 9 16 14 19 22 12 17 5 22 8 14 2 9 9 9 12 2" fill="${color}" fill-opacity="0.3"/>
-    </svg>
-  `
-  
-  return new L.DivIcon({
-    html: `<div style="position: relative;">
-              <div style="width: 32px; height: 32px;">${svg}</div>
-              <div style="position: absolute; top: 0; left: 0; width: 32px; height: 32px; border-radius: 50%; background: ${color}; opacity: 0.3; animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
-            </div>`,
-    className: 'custom-marker',
-    iconSize: [32, 32],
-    iconAnchor: [16, 16],
-    popupAnchor: [0, -16]
-  })
-}
-
 // Component to center map on selected vehicle
 function CenterMap({ position }) {
   const map = useMap()
@@ -98,7 +70,6 @@ function FitBounds({ vehicles }) {
       const bounds = L.latLngBounds(locations.map(v => [v.latitude, v.longitude]))
       map.fitBounds(bounds, { padding: [50, 50] })
     } else {
-      // Default to Abuja, Nigeria if no vehicles with location
       map.setView([9.0765, 7.3986], 12)
     }
   }, [map, vehicles])
@@ -107,14 +78,9 @@ function FitBounds({ vehicles }) {
 
 const TrackerMap = ({ vehicles, selectedVehicle, onMarkerClick }) => {
   const [pathHistory, setPathHistory] = React.useState([])
-  const [mapCenter, setMapCenter] = React.useState([9.0765, 7.3986]) // Abuja coordinates
-  const [mapZoom, setMapZoom] = React.useState(12)
-  
-  // Update path history when selected vehicle changes
+
   useEffect(() => {
     if (selectedVehicle && selectedVehicle.id) {
-      // In a real app, you'd fetch location history from API
-      // For now, we'll create a simulated path
       const mockHistory = []
       if (selectedVehicle.latitude && selectedVehicle.longitude) {
         for (let i = 0; i < 10; i++) {
@@ -129,7 +95,6 @@ const TrackerMap = ({ vehicles, selectedVehicle, onMarkerClick }) => {
     }
   }, [selectedVehicle])
 
-  // Get icon based on vehicle status
   const getVehicleIcon = (vehicle) => {
     if (vehicle.status === 'moving') return movingIcon
     if (vehicle.status === 'alert') return alertIcon
@@ -137,7 +102,6 @@ const TrackerMap = ({ vehicles, selectedVehicle, onMarkerClick }) => {
     return parkedIcon
   }
 
-  // Format time for popup
   const formatTime = (timestamp) => {
     if (!timestamp) return 'Never'
     const date = new Date(timestamp)
@@ -147,20 +111,18 @@ const TrackerMap = ({ vehicles, selectedVehicle, onMarkerClick }) => {
   return (
     <div className="tracker-map-wrapper">
       <MapContainer
-        center={mapCenter}
-        zoom={mapZoom}
+        center={[9.0765, 7.3986]}
+        zoom={12}
         style={{ height: '100%', width: '100%', minHeight: '500px', borderRadius: '12px' }}
         zoomControl={true}
         scrollWheelZoom={true}
       >
-        {/* Dark theme tile layer */}
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
           url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
           subdomains="abcd"
         />
         
-        {/* Vehicle Markers */}
         {vehicles.map(vehicle => (
           vehicle.latitude && vehicle.longitude && (
             <Marker
@@ -200,6 +162,41 @@ const TrackerMap = ({ vehicles, selectedVehicle, onMarkerClick }) => {
                         {vehicle.speed || 0} km/h
                       </span>
                     </div>
+                    
+                    {/* ADDRESS SECTION - NEW */}
+                    {vehicle.formatted_address && (
+                      <div className="popup-address">
+                        <div className="popup-row">
+                          <span className="popup-label">📍 Location:</span>
+                          <span className="popup-value address-text">{vehicle.formatted_address}</span>
+                        </div>
+                        {vehicle.address?.road && (
+                          <div className="popup-row address-detail">
+                            <span className="popup-label">🛣️ Road:</span>
+                            <span className="popup-value">{vehicle.address.road}</span>
+                          </div>
+                        )}
+                        {vehicle.address?.town && (
+                          <div className="popup-row address-detail">
+                            <span className="popup-label">🏙️ Town:</span>
+                            <span className="popup-value">{vehicle.address.town}</span>
+                          </div>
+                        )}
+                        {vehicle.address?.state && (
+                          <div className="popup-row address-detail">
+                            <span className="popup-label">🏛️ State:</span>
+                            <span className="popup-value">{vehicle.address.state}</span>
+                          </div>
+                        )}
+                        {vehicle.address?.country && (
+                          <div className="popup-row address-detail">
+                            <span className="popup-label">🌍 Country:</span>
+                            <span className="popup-value">{vehicle.address.country}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    
                     <div className="popup-row">
                       <span className="popup-label">Last Update:</span>
                       <span className="popup-value">{formatTime(vehicle.last_update)}</span>
@@ -223,7 +220,6 @@ const TrackerMap = ({ vehicles, selectedVehicle, onMarkerClick }) => {
           )
         ))}
         
-        {/* Path History Line for selected vehicle */}
         {pathHistory.length > 1 && (
           <Polyline
             positions={pathHistory}
@@ -234,12 +230,10 @@ const TrackerMap = ({ vehicles, selectedVehicle, onMarkerClick }) => {
           />
         )}
         
-        {/* Center map on selected vehicle */}
         {selectedVehicle && selectedVehicle.latitude && selectedVehicle.longitude && (
           <CenterMap position={[selectedVehicle.latitude, selectedVehicle.longitude]} />
         )}
         
-        {/* Auto-fit bounds to show all vehicles */}
         <FitBounds vehicles={vehicles} />
       </MapContainer>
       
@@ -269,7 +263,7 @@ const TrackerMap = ({ vehicles, selectedVehicle, onMarkerClick }) => {
         :global(.map-popup) {
           font-family: var(--font-tech);
           font-size: 12px;
-          min-width: 220px;
+          min-width: 260px;
           padding: 4px;
         }
         
@@ -324,12 +318,13 @@ const TrackerMap = ({ vehicles, selectedVehicle, onMarkerClick }) => {
         :global(.popup-row) {
           display: flex;
           justify-content: space-between;
-          margin-bottom: 6px;
+          margin-bottom: 4px;
           font-size: 11px;
         }
         
         :global(.popup-label) {
           color: var(--text-muted);
+          font-weight: 400;
         }
         
         :global(.popup-value) {
@@ -339,6 +334,38 @@ const TrackerMap = ({ vehicles, selectedVehicle, onMarkerClick }) => {
         
         :global(.popup-value.coord) {
           font-family: monospace;
+          font-size: 10px;
+        }
+        
+        /* Address Styles */
+        :global(.popup-address) {
+          background: rgba(10, 111, 255, 0.05);
+          border-radius: 6px;
+          padding: 6px 8px;
+          margin: 4px 0 8px 0;
+          border-left: 2px solid #0a6fff;
+        }
+        
+        :global(.popup-address .popup-row) {
+          margin-bottom: 2px;
+        }
+        
+        :global(.popup-address .address-text) {
+          color: #0a6fff;
+          font-weight: 500;
+          text-align: right;
+          font-size: 10px;
+          max-width: 140px;
+        }
+        
+        :global(.popup-address .address-detail .popup-value) {
+          color: #94a3b8;
+          font-size: 10px;
+          text-align: right;
+          max-width: 120px;
+        }
+        
+        :global(.popup-address .address-detail .popup-label) {
           font-size: 10px;
         }
         

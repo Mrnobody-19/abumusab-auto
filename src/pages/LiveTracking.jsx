@@ -74,12 +74,12 @@ const LiveTracking = () => {
     
     subscriptionRef.current = subscription
     
-    const cleanup = smsService.startPollingMessages((locationUpdates) => {
+    const cleanup = smsService.startPollingMessages(async (locationUpdates) => {
       console.log('📍 New location updates received:', locationUpdates)
       
       const currentVehicles = vehiclesRef.current;
       
-      locationUpdates.forEach(update => {
+      for (const update of locationUpdates) {
         const phoneNumber = update.from || '';
         const normalizedIncoming = normalizePhone(phoneNumber)
         
@@ -90,6 +90,7 @@ const LiveTracking = () => {
         
         if (vehicle) {
           console.log(`🎯 Found vehicle: ${vehicle.vehicle_id}`)
+          console.log(`📍 Address: ${update.formatted_address}`)
           
           setVehicles(prevVehicles => 
             prevVehicles.map(v => {
@@ -101,7 +102,9 @@ const LiveTracking = () => {
                   speed: update.speed || v.speed || 0,
                   last_update: new Date().toISOString(),
                   location_source: 'sms',
-                  status: update.speed > 0 ? 'moving' : 'parked'
+                  status: update.speed > 0 ? 'moving' : 'parked',
+                  address: update.address || null,
+                  formatted_address: update.formatted_address || `${update.latitude.toFixed(6)}, ${update.longitude.toFixed(6)}`
                 }
               }
               return v
@@ -115,7 +118,9 @@ const LiveTracking = () => {
               longitude: update.longitude,
               speed: update.speed || 0,
               timestamp: update.timestamp,
-              source: 'sms'
+              source: 'sms',
+              address: update.address || null,
+              formatted_address: update.formatted_address || `${update.latitude.toFixed(6)}, ${update.longitude.toFixed(6)}`
             }
           }))
           
@@ -127,13 +132,15 @@ const LiveTracking = () => {
             setTimeout(() => setAutoOpenMap(false), 2000)
           }
           
+          // Show address in toast notification
+          const displayAddress = update.formatted_address || `${update.latitude.toFixed(4)}, ${update.longitude.toFixed(4)}`
           setCommandStatus({
             type: 'success',
-            message: `📍 ${vehicle.vehicle_id} location updated`
+            message: `📍 ${vehicle.vehicle_id}: ${displayAddress}`
           })
           setTimeout(() => setCommandStatus(null), 5000)
         }
-      })
+      }
     }, 3000)
     
     pollingCleanupRef.current = cleanup
@@ -365,7 +372,6 @@ const LiveTracking = () => {
       )}
 
       {!isMobile ? (
-        /* ====== DESKTOP LAYOUT ====== */
         <div className="main-layout">
           <div className="map-section">
             {vehicles.length > 0 ? (
@@ -386,7 +392,6 @@ const LiveTracking = () => {
             )}
           </div>
 
-          {/* Fleet Command Center - Desktop */}
           <div 
             className="sidebar"
             style={{ width: showSidebar ? sidebarWidth : 0 }}
@@ -400,7 +405,6 @@ const LiveTracking = () => {
               </div>
             )}
 
-            {/* Header */}
             <div className="sidebar-header">
               <div className="sidebar-title">
                 <span className="title-icon">🚛</span>
@@ -419,7 +423,6 @@ const LiveTracking = () => {
               </div>
             </div>
 
-            {/* Stats Grid */}
             <div className="stats-grid-modern">
               <div className="stat-card-modern">
                 <span className="stat-number">{selectedStats?.total || 0}</span>
@@ -439,7 +442,6 @@ const LiveTracking = () => {
               </div>
             </div>
 
-            {/* Tracker Status */}
             <div className="tracker-status-modern">
               <div className="status-chip">
                 <span className="chip-dot active"></span>
@@ -455,7 +457,6 @@ const LiveTracking = () => {
               </div>
             </div>
 
-            {/* Search */}
             <div className="search-modern">
               <span className="search-icon">🔍</span>
               <input
@@ -469,7 +470,6 @@ const LiveTracking = () => {
               )}
             </div>
 
-            {/* Filters */}
             <div className="filters-modern">
               <button 
                 className={`filter-modern ${statusFilter === 'all' ? 'active' : ''}`}
@@ -497,7 +497,6 @@ const LiveTracking = () => {
               </button>
             </div>
 
-            {/* Vehicle List */}
             <div className="vehicle-list-modern">
               {filteredVehicles.length === 0 ? (
                 <div className="empty-state">
@@ -511,6 +510,8 @@ const LiveTracking = () => {
                   const statusIcon = vehicle.status === 'moving' ? '🚗' : 
                                    vehicle.status === 'parked' ? '🅿️' : 
                                    vehicle.status === 'alert' ? '⚠️' : '💤'
+                  const displayAddress = vehicle.formatted_address || 
+                    (hasLiveLocation ? `${vehicle.latitude.toFixed(4)}, ${vehicle.longitude.toFixed(4)}` : 'No GPS')
                   
                   return (
                     <div 
@@ -544,8 +545,20 @@ const LiveTracking = () => {
                         </span>
                       </div>
                       {hasLiveLocation && (
-                        <div className="vehicle-coords-modern">
-                          📍 {vehicle.latitude.toFixed(4)}, {vehicle.longitude.toFixed(4)}
+                        <div className="vehicle-address-modern">
+                          <div className="address-main">📍 {displayAddress}</div>
+                          {vehicle.address?.town && (
+                            <div className="address-detail">🏙️ {vehicle.address.town}</div>
+                          )}
+                          {vehicle.address?.state && (
+                            <div className="address-detail">🏛️ {vehicle.address.state}</div>
+                          )}
+                          {vehicle.address?.country && (
+                            <div className="address-detail">🌍 {vehicle.address.country}</div>
+                          )}
+                          <div className="address-coords">
+                            📌 {vehicle.latitude.toFixed(6)}, {vehicle.longitude.toFixed(6)}
+                          </div>
                         </div>
                       )}
                       <div className="vehicle-meta-modern">
@@ -601,7 +614,6 @@ const LiveTracking = () => {
               )}
             </div>
 
-            {/* Footer */}
             <div className="sidebar-footer-modern">
               <span>© 2026 Fleet Tracker</span>
               <span className="footer-version-modern">v2.0</span>
@@ -609,7 +621,6 @@ const LiveTracking = () => {
           </div>
         </div>
       ) : (
-        /* ====== MOBILE LAYOUT ====== */
         <div className="mobile-layout">
           <div className="mobile-header">
             <div className="mobile-title">
@@ -691,6 +702,8 @@ const LiveTracking = () => {
                   {filteredVehicles.map(vehicle => {
                     const hasLiveLocation = vehicle.latitude && vehicle.longitude
                     const statusColor = getStatusColor(vehicle.status)
+                    const displayAddress = vehicle.formatted_address || 
+                      (hasLiveLocation ? `${vehicle.latitude.toFixed(4)}, ${vehicle.longitude.toFixed(4)}` : 'No GPS')
                     
                     return (
                       <div 
@@ -713,6 +726,11 @@ const LiveTracking = () => {
                           <span>{vehicle.name || 'Unnamed'}</span>
                           <span>👤 {vehicle.driver_name || 'No driver'}</span>
                         </div>
+                        {hasLiveLocation && (
+                          <div className="mobile-address-preview">
+                            <span className="address-preview">📍 {displayAddress}</span>
+                          </div>
+                        )}
                         <div className="mobile-vehicle-actions">
                           <button 
                             className="mobile-action-btn"
@@ -876,7 +894,6 @@ const LiveTracking = () => {
           font-weight: 600;
         }
 
-        /* ====== SIDEBAR MODERN ====== */
         .sidebar {
           height: 100vh;
           background: linear-gradient(180deg, #0a1628, #060e1e);
@@ -957,7 +974,6 @@ const LiveTracking = () => {
           color: #ef4444;
         }
 
-        /* Stats Grid Modern */
         .stats-grid-modern {
           display: grid;
           grid-template-columns: repeat(4, 1fr);
@@ -989,7 +1005,6 @@ const LiveTracking = () => {
           margin-top: 2px;
         }
 
-        /* Tracker Status Modern */
         .tracker-status-modern {
           display: flex;
           gap: 12px;
@@ -1025,7 +1040,6 @@ const LiveTracking = () => {
           margin-left: 2px;
         }
 
-        /* Search Modern */
         .search-modern {
           position: relative;
           padding: 10px 20px;
@@ -1068,7 +1082,6 @@ const LiveTracking = () => {
           cursor: pointer;
         }
 
-        /* Filters Modern */
         .filters-modern {
           display: flex;
           gap: 6px;
@@ -1131,7 +1144,6 @@ const LiveTracking = () => {
         .dot.yellow { background: #f59e0b; }
         .dot.red { background: #ef4444; }
 
-        /* Vehicle List Modern */
         .vehicle-list-modern {
           flex: 1;
           overflow-y: auto;
@@ -1233,12 +1245,35 @@ const LiveTracking = () => {
           margin-bottom: 4px;
         }
 
-        .vehicle-coords-modern {
+        /* Address styles */
+        .vehicle-address-modern {
+          margin-top: 6px;
+          padding: 8px 10px;
+          background: rgba(8, 20, 50, 0.3);
+          border-radius: 6px;
+          border-left: 2px solid #0a6fff;
+        }
+
+        .address-main {
+          font-size: 12px;
+          color: white;
+          font-family: var(--font-tech, monospace);
+          margin-bottom: 2px;
+        }
+
+        .address-detail {
           font-size: 10px;
-          color: #0a6fff;
+          color: #94a3b8;
+          font-family: var(--font-tech, monospace);
+        }
+
+        .address-coords {
+          font-size: 9px;
+          color: #4a5a7a;
           font-family: monospace;
-          opacity: 0.7;
-          margin-bottom: 4px;
+          margin-top: 4px;
+          padding-top: 4px;
+          border-top: 1px solid rgba(10, 111, 255, 0.05);
         }
 
         .vehicle-meta-modern {
@@ -1379,7 +1414,7 @@ const LiveTracking = () => {
           background: rgba(10, 111, 255, 0.2);
         }
 
-        /* ====== MOBILE STYLES ====== */
+        /* Mobile styles */
         .mobile-layout {
           display: flex;
           flex-direction: column;
@@ -1580,6 +1615,18 @@ const LiveTracking = () => {
           color: #94a3b8;
           font-family: var(--font-tech, monospace);
           margin-bottom: 8px;
+        }
+        .mobile-address-preview {
+          margin-bottom: 8px;
+          padding: 4px 8px;
+          background: rgba(10, 111, 255, 0.05);
+          border-radius: 4px;
+          border-left: 2px solid #0a6fff;
+        }
+        .address-preview {
+          font-size: 10px;
+          color: #0a6fff;
+          font-family: var(--font-tech, monospace);
         }
         .mobile-vehicle-actions {
           display: flex;

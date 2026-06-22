@@ -11,6 +11,102 @@ let messageListeners = [];
 let processedMessageIds = new Set();
 
 /**
+ * Convert coordinates to address using OpenStreetMap Nominatim
+ * @param {number} latitude - The latitude
+ * @param {number} longitude - The longitude
+ * @returns {Promise<Object>} Address components
+ */
+export const reverseGeocode = async (latitude, longitude) => {
+  try {
+    const response = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json&addressdetails=1&zoom=18`,
+      {
+        headers: {
+          'User-Agent': 'FleetTracker/1.0'
+        }
+      }
+    );
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    
+    if (data && data.address) {
+      const address = data.address;
+      
+      const result = {
+        full_address: data.display_name || '',
+        road: address.road || address.street || '',
+        neighbourhood: address.neighbourhood || address.suburb || address.district || '',
+        town: address.town || address.city || address.village || address.municipality || '',
+        state: address.state || address.region || address.province || '',
+        country: address.country || '',
+        postcode: address.postcode || '',
+        latitude: latitude,
+        longitude: longitude
+      };
+      
+      if (!result.road && address.hamlet) {
+        result.road = address.hamlet;
+      }
+      
+      return result;
+    }
+    
+    return {
+      full_address: `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`,
+      road: '',
+      town: '',
+      state: '',
+      country: '',
+      postcode: '',
+      latitude,
+      longitude
+    };
+  } catch (error) {
+    console.error('Error reverse geocoding:', error);
+    return {
+      full_address: `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`,
+      road: '',
+      town: '',
+      state: '',
+      country: '',
+      postcode: '',
+      latitude,
+      longitude,
+      error: error.message
+    };
+  }
+};
+
+/**
+ * Format address into a readable string
+ * @param {Object} address - The address object from reverseGeocode
+ * @returns {string} Formatted address
+ */
+export const formatAddress = (address) => {
+  if (!address) return 'Unknown location';
+  
+  const parts = [];
+  
+  if (address.road) parts.push(address.road);
+  if (address.neighbourhood && !address.road.includes(address.neighbourhood)) {
+    parts.push(address.neighbourhood);
+  }
+  if (address.town) parts.push(address.town);
+  if (address.state) parts.push(address.state);
+  if (address.country) parts.push(address.country);
+  
+  if (address.full_address && parts.length === 0) {
+    return address.full_address;
+  }
+  
+  return parts.join(', ') || `${address.latitude?.toFixed(6)}, ${address.longitude?.toFixed(6)}`;
+};
+
+/**
  * Get tracker password from Supabase by vehicle ID
  */
 export const getTrackerPassword = async (vehicleId) => {
@@ -114,7 +210,6 @@ export const sendMMS = async (to, message, imageBase64 = null, imageUrl = null) 
 
 /**
  * Get all received messages from LibreSMS
- * Handles the specific response format: { Success: true, Message: '...', Data: {...} }
  */
 export const getMessages = async () => {
   try {
@@ -129,18 +224,12 @@ export const getMessages = async () => {
     const result = await response.json();
     console.log('📥 Raw response from LibreSMS:', result);
     
-    // Check if the response has the expected format
     if (result.Success && result.Data) {
-      // The Data object might contain messages in different formats
       let messages = [];
       
-      // If Data is an array
       if (Array.isArray(result.Data)) {
         messages = result.Data;
-      } 
-      // If Data is an object with a messages property
-      else if (result.Data && typeof result.Data === 'object') {
-        // Check for common property names
+      } else if (result.Data && typeof result.Data === 'object') {
         if (result.Data.messages && Array.isArray(result.Data.messages)) {
           messages = result.Data.messages;
         } else if (result.Data.sms && Array.isArray(result.Data.sms)) {
@@ -148,7 +237,6 @@ export const getMessages = async () => {
         } else if (result.Data.items && Array.isArray(result.Data.items)) {
           messages = result.Data.items;
         } else {
-          // Try to extract any array from the Data object
           for (const key of Object.keys(result.Data)) {
             if (Array.isArray(result.Data[key])) {
               messages = result.Data[key];
@@ -162,7 +250,6 @@ export const getMessages = async () => {
       return messages;
     }
     
-    // If the response is an array directly
     if (Array.isArray(result)) {
       return result;
     }
@@ -177,11 +264,9 @@ export const getMessages = async () => {
 
 /**
  * Parse coordinates from SMS message
- * Handles: "lat:9.925346 lon:8.898015 speed:0.00 T:26/06/18 23:13"
  */
 export const parseCoordinates = (message) => {
   try {
-    // Handle different message formats
     let body = '';
     
     if (typeof message === 'string') {
@@ -192,7 +277,6 @@ export const parseCoordinates = (message) => {
     
     if (!body) return null;
     
-    // Look for lat: and lon: patterns
     const latMatch = body.match(/lat:([0-9.]+)/i);
     const lonMatch = body.match(/lon:([0-9.]+)/i);
     const speedMatch = body.match(/speed:([0-9.]+)/i);
@@ -232,7 +316,7 @@ export const extractPhoneNumber = (message) => {
 };
 
 /**
- * Check for new messages and parse coordinates
+ * Check for new messages and parse coordinates with reverse geocoding
  */
 export const checkForNewMessages = async () => {
   try {
@@ -244,13 +328,10 @@ export const checkForNewMessages = async () => {
     
     console.log(`📬 Processing ${messages.length} messages for coordinates`);
     
-    // Parse each message for coordinates
     const locationUpdates = [];
     for (const msg of messages) {
-      // Get message ID or create one from content
       const msgId = msg.id || msg._id || `${msg.from}-${msg.body}-${msg.timestamp}`;
       
-      // Skip if we've already processed this message
       if (processedMessageIds.has(msgId)) {
         continue;
       }
@@ -260,19 +341,35 @@ export const checkForNewMessages = async () => {
         const fromNumber = extractPhoneNumber(msg);
         console.log(`📍 Found coordinates in message from ${fromNumber}:`, coords);
         
-        // Mark as processed
         processedMessageIds.add(msgId);
         
-        locationUpdates.push({
-          ...coords,
-          from: fromNumber,
-          message: msg,
-          timestamp: msg.timestamp || msg.date || new Date().toISOString()
-        });
+        // Reverse geocode the coordinates
+        try {
+          const address = await reverseGeocode(coords.latitude, coords.longitude);
+          console.log('📮 Address found:', address);
+          
+          locationUpdates.push({
+            ...coords,
+            from: fromNumber,
+            message: msg,
+            timestamp: msg.timestamp || msg.date || new Date().toISOString(),
+            address: address,
+            formatted_address: formatAddress(address)
+          });
+        } catch (geocodeError) {
+          console.error('Geocoding error:', geocodeError);
+          locationUpdates.push({
+            ...coords,
+            from: fromNumber,
+            message: msg,
+            timestamp: msg.timestamp || msg.date || new Date().toISOString(),
+            address: null,
+            formatted_address: `${coords.latitude.toFixed(6)}, ${coords.longitude.toFixed(6)}`
+          });
+        }
       }
     }
     
-    // Limit the processed IDs set to prevent memory leaks
     if (processedMessageIds.size > 1000) {
       const iterator = processedMessageIds.values();
       for (let i = 0; i < 500; i++) {
@@ -281,7 +378,7 @@ export const checkForNewMessages = async () => {
     }
     
     if (locationUpdates.length > 0) {
-      console.log(`📡 Found ${locationUpdates.length} new location updates`);
+      console.log(`📡 Found ${locationUpdates.length} new location updates with addresses`);
     }
     
     return locationUpdates;
@@ -301,12 +398,10 @@ export const startPollingMessages = (callback, interval = 5000) => {
   
   console.log('🔄 Starting message polling (every ' + interval + 'ms)...');
   
-  // Add callback to listeners
   if (callback) {
     messageListeners.push(callback);
   }
   
-  // Immediate first check
   setTimeout(async () => {
     const updates = await checkForNewMessages();
     if (updates.length > 0) {
@@ -315,7 +410,6 @@ export const startPollingMessages = (callback, interval = 5000) => {
     }
   }, 1000);
   
-  // Start polling
   pollingInterval = setInterval(async () => {
     try {
       const updates = await checkForNewMessages();
@@ -360,7 +454,6 @@ export const addMessageListener = (callback) => {
  */
 export const sendCommand = async (phoneNumber, command, password = '123456') => {
   try {
-    // Use 'position' command for location
     const fullCommand = `${command}${password}`;
     console.log(`📤 Sending command "${command}" to ${phoneNumber} with password`);
     
@@ -522,6 +615,8 @@ const smsService = {
   stopPollingMessages,
   addMessageListener,
   extractPhoneNumber,
+  reverseGeocode,
+  formatAddress,
   BASE_URL: LIBRESMS_BASE_URL
 };
 
