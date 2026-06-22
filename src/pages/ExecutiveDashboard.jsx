@@ -1,16 +1,25 @@
+// src/pages/ExecutiveDashboard.jsx
+
 import React, { useState, useEffect } from 'react'
 import { useAuth } from '../context/AuthContext'
-import { peyflexService as paymentService } from '../services/peyflexService'
 import { supabase } from '../lib/supabase'
 import { useNavigate } from 'react-router-dom'
 import AddTrackerModal from '../components/AddTrackerModal'
+import RechargeModal from '../components/RechargeModal'
+import BulkRechargeModal from '../components/BulkRechargeModal'
+import smeService from '../services/smeService'
 
 const ExecutiveDashboard = () => {
   const { user } = useAuth()
   const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
   const [showAddModal, setShowAddModal] = useState(false)
+  const [showRechargeModal, setShowRechargeModal] = useState(false)
+  const [showBulkRechargeModal, setShowBulkRechargeModal] = useState(false)
+  const [selectedVehicleForRecharge, setSelectedVehicleForRecharge] = useState(null)
   const [vehicles, setVehicles] = useState([])
+  const [selectedVehicles, setSelectedVehicles] = useState([])
+  const [selectAll, setSelectAll] = useState(false)
   const [stats, setStats] = useState({
     totalVehicles: 0,
     activeTrackers: 0,
@@ -26,6 +35,16 @@ const ExecutiveDashboard = () => {
   const [activeTab, setActiveTab] = useState('all')
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
+  // Recharge plans starting from ₦100
+  const rechargePlans = [
+    { id: 1, name: 'Starter', price: 100, days: 7 },
+    { id: 2, name: 'Basic', price: 200, days: 15 },
+    { id: 3, name: 'Standard', price: 500, days: 30 },
+    { id: 4, name: 'Premium', price: 1000, days: 60 },
+    { id: 5, name: 'Enterprise', price: 2000, days: 90 },
+    { id: 6, name: 'Ultimate', price: 5000, days: 180 }
+  ]
+
   useEffect(() => {
     fetchDashboardData()
     fetchBalance()
@@ -37,7 +56,6 @@ const ExecutiveDashboard = () => {
       setLoading(true)
       setError(null)
 
-      // Get all vehicles
       const { data: vehiclesData, error: vehiclesError } = await supabase
         .from('vehicles')
         .select('*')
@@ -48,7 +66,6 @@ const ExecutiveDashboard = () => {
       const expiringSoon = vehiclesData?.filter(v => v.tracker_status === 'expiring_soon').length || 0
       const expiredTrackers = vehiclesData?.filter(v => v.tracker_status === 'expired').length || 0
 
-      // Get monthly revenue
       const firstDayOfMonth = new Date()
       firstDayOfMonth.setDate(1)
       firstDayOfMonth.setHours(0, 0, 0, 0)
@@ -62,7 +79,6 @@ const ExecutiveDashboard = () => {
 
       const monthlyRevenue = monthlyData?.reduce((sum, r) => sum + (r.amount || 0), 0) || 0
 
-      // Get all time revenue
       const { data: allTimeData, error: allTimeError } = await supabase
         .from('recharge_history')
         .select('amount')
@@ -72,7 +88,6 @@ const ExecutiveDashboard = () => {
       const totalRevenue = allTimeData?.reduce((sum, r) => sum + (r.amount || 0), 0) || 0
       const totalRecharges = allTimeData?.length || 0
 
-      // Get recent transactions
       const { data: recentTransactions, error: recentError } = await supabase
         .from('recharge_history')
         .select(`
@@ -118,6 +133,8 @@ const ExecutiveDashboard = () => {
         .order('created_at', { ascending: false })
       if (error) throw error
       setVehicles(data || [])
+      setSelectedVehicles([])
+      setSelectAll(false)
     } catch (err) {
       console.error('Error fetching vehicles:', err)
     }
@@ -125,14 +142,10 @@ const ExecutiveDashboard = () => {
 
   const fetchBalance = async () => {
     try {
-      const result = await paymentService.getBalance()
-      if (result.success) {
-        setBalance(result.balance || result.data?.balance)
-      } else {
-        setBalance(null)
-      }
+      const data = await smeService.checkBalance()
+      setBalance(data)
     } catch (err) {
-      console.error('Error fetching balance:', err)
+      console.error('Error fetching SME balance:', err)
       setBalance(null)
     }
   }
@@ -174,10 +187,51 @@ const ExecutiveDashboard = () => {
     }
   }
 
+  const handleRechargeSuccess = (result) => {
+    console.log('Recharge successful:', result)
+    fetchVehicles()
+    fetchDashboardData()
+    fetchBalance()
+  }
+
+  const handleBulkRechargeSuccess = (results) => {
+    console.log('Bulk recharge completed:', results)
+    fetchVehicles()
+    fetchDashboardData()
+    fetchBalance()
+    setSelectedVehicles([])
+    setSelectAll(false)
+  }
+
+  const toggleVehicleSelection = (vehicleId) => {
+    setSelectedVehicles(prev => {
+      if (prev.includes(vehicleId)) {
+        return prev.filter(id => id !== vehicleId)
+      } else {
+        return [...prev, vehicleId]
+      }
+    })
+  }
+
+  const toggleSelectAll = () => {
+    if (selectAll) {
+      setSelectedVehicles([])
+    } else {
+      const allIds = filteredVehicles.map(v => v.id)
+      setSelectedVehicles(allIds)
+    }
+    setSelectAll(!selectAll)
+  }
+
   const tabs = ['All', 'Active', 'Expiring', 'Expired']
   const filteredVehicles = activeTab === 'all' 
     ? vehicles 
     : vehicles.filter(v => v.tracker_status === activeTab.toLowerCase())
+
+  const getBalanceDisplay = () => {
+    if (!balance) return 'Loading...'
+    return `₦${(balance.balance || balance.wallet_balance || 0).toLocaleString()}`
+  }
 
   if (loading) {
     return (
@@ -319,9 +373,9 @@ const ExecutiveDashboard = () => {
                 <div className="kpi-sub">All time</div>
               </div>
               <div className={`kpi-card ${balance !== null ? 'has-balance' : ''}`}>
-                <div className="kpi-label">Peyflex Balance</div>
+                <div className="kpi-label">SME Wallet Balance</div>
                 <div className="kpi-val" style={{ color: balance !== null ? '#22c55e' : 'var(--text-muted)' }}>
-                  {balance !== null ? formatCurrency(balance) : 'N/A'}
+                  {balance !== null ? getBalanceDisplay() : 'N/A'}
                 </div>
                 <div className="kpi-sub">
                   <button className="refresh-balance" onClick={fetchBalance}>
@@ -335,7 +389,17 @@ const ExecutiveDashboard = () => {
             <div className="vehicles-section">
               <div className="section-header">
                 <h3>🚗 Vehicle Tracker Status</h3>
-                <div className="vp-count">{vehicles.length} total</div>
+                <div className="header-actions-right">
+                  <span className="vp-count">{vehicles.length} total</span>
+                  {selectedVehicles.length > 0 && (
+                    <button 
+                      className="btn-bulk-recharge"
+                      onClick={() => setShowBulkRechargeModal(true)}
+                    >
+                      📦 Bulk Recharge ({selectedVehicles.length})
+                    </button>
+                  )}
+                </div>
               </div>
               
               <div className="vp-filters">
@@ -348,6 +412,14 @@ const ExecutiveDashboard = () => {
                     {tab}
                   </button>
                 ))}
+                {filteredVehicles.length > 0 && (
+                  <button
+                    className="vp-filter select-all"
+                    onClick={toggleSelectAll}
+                  >
+                    {selectAll ? '☑️ Deselect All' : '☐ Select All'}
+                  </button>
+                )}
               </div>
 
               <div className="vehicles-table-container">
@@ -357,6 +429,14 @@ const ExecutiveDashboard = () => {
                   <table className="vehicles-table">
                     <thead>
                       <tr>
+                        <th style={{ width: '40px' }}>
+                          <input
+                            type="checkbox"
+                            checked={selectAll}
+                            onChange={toggleSelectAll}
+                            className="checkbox-select"
+                          />
+                        </th>
                         <th>Vehicle ID</th>
                         <th>Name</th>
                         <th>Model</th>
@@ -365,11 +445,20 @@ const ExecutiveDashboard = () => {
                         <th>Status</th>
                         <th>Plan</th>
                         <th>Expiry</th>
+                        <th>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {filteredVehicles.map(vehicle => (
                         <tr key={vehicle.id}>
+                          <td>
+                            <input
+                              type="checkbox"
+                              checked={selectedVehicles.includes(vehicle.id)}
+                              onChange={() => toggleVehicleSelection(vehicle.id)}
+                              className="checkbox-select"
+                            />
+                          </td>
                           <td>
                             <span className="vehicle-id">{vehicle.vehicle_id}</span>
                           </td>
@@ -396,6 +485,17 @@ const ExecutiveDashboard = () => {
                                 ? new Date(vehicle.tracker_expiry).toLocaleDateString()
                                 : '—'}
                             </span>
+                          </td>
+                          <td>
+                            <button 
+                              className="btn-recharge"
+                              onClick={() => {
+                                setSelectedVehicleForRecharge(vehicle)
+                                setShowRechargeModal(true)
+                              }}
+                            >
+                              🔋 Recharge
+                            </button>
                           </td>
                         </tr>
                       ))}
@@ -457,6 +557,29 @@ const ExecutiveDashboard = () => {
           fetchVehicles()
           fetchDashboardData()
         }}
+      />
+
+      {/* Individual Recharge Modal */}
+      <RechargeModal
+        isOpen={showRechargeModal}
+        onClose={() => {
+          setShowRechargeModal(false)
+          setSelectedVehicleForRecharge(null)
+        }}
+        onSuccess={handleRechargeSuccess}
+        vehicle={selectedVehicleForRecharge}
+        plans={rechargePlans}
+      />
+
+      {/* Bulk Recharge Modal */}
+      <BulkRechargeModal
+        isOpen={showBulkRechargeModal}
+        onClose={() => {
+          setShowBulkRechargeModal(false)
+        }}
+        onSuccess={handleBulkRechargeSuccess}
+        vehicles={vehicles.filter(v => selectedVehicles.includes(v.id))}
+        plans={rechargePlans}
       />
 
       <style jsx>{`
@@ -787,10 +910,34 @@ const ExecutiveDashboard = () => {
           margin: 0;
         }
 
+        .header-actions-right {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+
         .vp-count {
           font-family: var(--font-tech);
           font-size: 12px;
           color: var(--blue-neon);
+        }
+
+        .btn-bulk-recharge {
+          background: linear-gradient(135deg, #7c3aed, #6d28d9);
+          border: none;
+          color: white;
+          padding: 6px 14px;
+          border-radius: 8px;
+          cursor: pointer;
+          font-family: var(--font-tech);
+          font-size: 12px;
+          font-weight: 600;
+          transition: all 0.2s;
+        }
+
+        .btn-bulk-recharge:hover {
+          transform: scale(1.05);
+          box-shadow: 0 4px 16px rgba(124, 58, 237, 0.4);
         }
 
         .vp-filters {
@@ -820,6 +967,15 @@ const ExecutiveDashboard = () => {
           background: rgba(10, 111, 255, 0.15);
           border-color: var(--blue-neon);
           color: var(--blue-neon);
+        }
+
+        .vp-filter.select-all {
+          border-color: rgba(124, 58, 237, 0.3);
+          color: #7c3aed;
+        }
+
+        .vp-filter.select-all:hover {
+          background: rgba(124, 58, 237, 0.1);
         }
 
         .vehicles-table-container {
@@ -864,6 +1020,13 @@ const ExecutiveDashboard = () => {
           font-size: 11px;
         }
 
+        .checkbox-select {
+          width: 16px;
+          height: 16px;
+          cursor: pointer;
+          accent-color: #7c3aed;
+        }
+
         .tracker-status {
           display: inline-block;
           padding: 3px 10px;
@@ -903,6 +1066,24 @@ const ExecutiveDashboard = () => {
           text-align: center;
           padding: 40px 20px;
           color: var(--text-muted);
+        }
+
+        .btn-recharge {
+          background: linear-gradient(135deg, #0a6fff, #0055cc);
+          border: none;
+          color: white;
+          padding: 4px 12px;
+          border-radius: 6px;
+          cursor: pointer;
+          font-family: var(--font-tech);
+          font-size: 11px;
+          font-weight: 600;
+          transition: all 0.2s;
+        }
+
+        .btn-recharge:hover {
+          transform: scale(1.05);
+          box-shadow: 0 2px 8px rgba(10, 111, 255, 0.3);
         }
 
         .transactions-section {
@@ -1038,6 +1219,9 @@ const ExecutiveDashboard = () => {
           .vehicles-table tbody td {
             padding: 8px 10px;
             font-size: 11px;
+          }
+          .header-actions-right {
+            flex-wrap: wrap;
           }
         }
 
